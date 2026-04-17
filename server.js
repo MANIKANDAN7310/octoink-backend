@@ -59,6 +59,9 @@ app.options("*", cors());
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
+// Static files (serve local uploads if they exist)
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
 // ═══════════════════════════════════════════════════════
 //  MongoDB Connection with Reconnection Logic
 // ═══════════════════════════════════════════════════════
@@ -96,6 +99,10 @@ app.use("/api/products", productRoutes);
 app.use("/api/orders", orderRoutes);
 app.use("/api/portfolio", portfolioRoutes);
 
+import multer from "multer";
+import { portfolioStorage } from "./config/cloudinary.js";
+const uploadBanner = multer({ storage: portfolioStorage });
+
 // ─── Banner Routes (inline) ───────────────────────────
 app.get("/api/banners", async (req, res) => {
     try {
@@ -107,9 +114,12 @@ app.get("/api/banners", async (req, res) => {
     }
 });
 
-app.post("/api/banners", async (req, res) => {
+app.post("/api/banners", uploadBanner.single("image"), async (req, res) => {
     try {
-        const banner = new Banner(req.body);
+        const payload = { ...req.body };
+        if (req.file) payload.image = req.file.path;
+
+        const banner = new Banner(payload);
         await banner.save();
         res.status(201).json({ success: true, banner });
     } catch (err) {
@@ -117,9 +127,12 @@ app.post("/api/banners", async (req, res) => {
     }
 });
 
-app.put("/api/banners/:id", async (req, res) => {
+app.put("/api/banners/:id", uploadBanner.single("image"), async (req, res) => {
     try {
-        const banner = await Banner.findByIdAndUpdate(req.params.id, req.body, { new: true });
+        const payload = { ...req.body };
+        if (req.file) payload.image = req.file.path;
+
+        const banner = await Banner.findByIdAndUpdate(req.params.id, payload, { new: true });
         res.json({ success: true, banner });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
