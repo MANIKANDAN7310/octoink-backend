@@ -29,7 +29,7 @@ export const createOrder = async (req, res) => {
 
         // Save pending order to DB
         const newOrder = new Order({
-            userId: req.user._id,
+            userId: req.user.id,
             items,
             totalAmount: amount,
             currency: currency || "INR",
