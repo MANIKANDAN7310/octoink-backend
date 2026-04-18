@@ -11,6 +11,8 @@ import authRoutes from "./routes/authRoutes.js";
 import productRoutes from "./routes/productRoutes.js";
 import orderRoutes from "./routes/orderRoutes.js";
 import portfolioRoutes from "./routes/portfolioRoutes.js";
+import statsRoutes from "./routes/statsRoutes.js";
+import paymentRoutes from "./routes/paymentRoutes.js";
 
 // Models for inline routes (banners, settings, contact)
 import Banner from "./models/Banner.js";
@@ -65,7 +67,11 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 // ═══════════════════════════════════════════════════════
 //  MongoDB Connection with Reconnection Logic
 // ═══════════════════════════════════════════════════════
-connectDB();
+connectDB().then(() => {
+    app.listen(PORT, () => {
+        console.log(`🚀 Server running on port ${PORT}`);
+    });
+});
 
 // Monitor MongoDB connection
 mongoose.connection.on("disconnected", () => {
@@ -98,6 +104,8 @@ app.use("/api/auth", authRoutes);
 app.use("/api/products", productRoutes);
 app.use("/api/orders", orderRoutes);
 app.use("/api/portfolio", portfolioRoutes);
+app.use("/api/stats", statsRoutes);
+app.use("/api/payment", paymentRoutes);
 
 import multer from "multer";
 import { portfolioStorage } from "./config/cloudinary.js";
@@ -270,8 +278,4 @@ process.on("unhandledRejection", (reason) => {
 process.on("uncaughtException", (err) => {
     console.error("💥 Uncaught Exception:", err);
     // Don't exit — keep server running
-});
-
-app.listen(PORT, () => {
-    console.log(`🚀 Server running on port ${PORT}`);
 });
