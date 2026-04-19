@@ -72,3 +72,32 @@ export const deleteProduct = async (req, res) => {
         res.status(500).json({ success: false, message: err.message });
     }
 };
+export const getDownloadHistory = async (req, res) => {
+    try {
+        const User = (await import('../models/User.js')).default;
+        const users = await User.find().select('name email downloadHistory');
+        
+        // Flatten all download history from all users
+        const allDownloads = [];
+        users.forEach(user => {
+            (user.downloadHistory || []).forEach(download => {
+                allDownloads.push({
+                    _id: download._id,
+                    productId: download.productId,
+                    productTitle: download.productTitle,
+                    userName: user.name,
+                    userEmail: user.email,
+                    paymentId: download.paymentId,
+                    downloadedAt: download.downloadedAt
+                });
+            });
+        });
+
+        // Sort by most recent
+        allDownloads.sort((a, b) => new Date(b.downloadedAt) - new Date(a.downloadedAt));
+
+        res.json({ success: true, downloads: allDownloads });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+};

@@ -32,11 +32,21 @@ export const login = async (req, res) => {
     }
 };
 
-export const getProfile = async (req, res) => {
+export const getClients = async (req, res) => {
     try {
-        const user = await User.findById(req.user.id).select("-password");
-        res.json({ success: true, user });
+        const clients = await User.find().select("-password").sort({ createdAt: -1 });
+        res.json({ success: true, clients });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
 };
+
+export const deleteClient = async (req, res) => {
+    try {
+        await User.findByIdAndDelete(req.params.id);
+        res.json({ success: true, message: 'Client deleted' });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+};
+

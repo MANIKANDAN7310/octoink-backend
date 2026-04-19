@@ -12,7 +12,8 @@ import {
 const router = express.Router();
 const upload = multer({ storage: designStorage });
 
-router.get('/', getOrders);
+router.get('/', getCustomDesigns);
+router.get('/purchases', getOrders);
 router.get('/custom-designs', getCustomDesigns);
 router.put('/:id/status', updateOrderStatus);
 router.delete('/:id', deleteOrder);

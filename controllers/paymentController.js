@@ -86,6 +86,34 @@ export const verifyPayment = async (req, res) => {
                 message: 'Payment verified successfully',
                 order
             });
+
+            // Post-payment updates (non-blocking)
+            try {
+                const Product = (await import('../models/Product.js')).default;
+                const User = (await import('../models/User.js')).default;
+
+                // 1. Increment product download counts
+                for (const item of order.items) {
+                    if (item.productId) {
+                        await Product.findByIdAndUpdate(item.productId, { $inc: { downloads: 1 } });
+                    }
+                }
+
+                // 2. Add to User download history
+                if (order.userId) {
+                    const downloadRecords = order.items.map(item => ({
+                        productId: item.productId,
+                        productTitle: item.title,
+                        paymentId: razorpay_payment_id,
+                        downloadedAt: new Date()
+                    }));
+                    await User.findByIdAndUpdate(order.userId, {
+                        $push: { downloadHistory: { $each: downloadRecords } }
+                    });
+                }
+            } catch (postErr) {
+                console.error("Post-payment update error:", postErr);
+            }
         } else {
             res.status(400).json({ success: false, message: 'Invalid signature' });
         }

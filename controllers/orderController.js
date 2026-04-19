@@ -63,11 +63,36 @@ export const updateOrderStatus = async (req, res) => {
     }
 };
 
-export const deleteOrder = async (req, res) => {
+export const getPurchases = async (req, res) => {
     try {
-        await CustomDesign.findByIdAndDelete(req.params.id);
-        res.json({ success: true, message: 'Order deleted' });
+        const orders = await Order.find()
+            .populate('userId', 'name email')
+            .populate('items.productId')
+            .sort({ createdAt: -1 });
+        res.json({ success: true, purchases: orders });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
 };
+
+export const deleteOrder = async (req, res) => {
+    try {
+        const id = req.params.id;
+        // Try deleting from CustomDesign first
+        let deleted = await CustomDesign.findByIdAndDelete(id);
+        
+        // If not found in CustomDesign, try Order
+        if (!deleted) {
+            deleted = await Order.findByIdAndDelete(id);
+        }
+
+        if (!deleted) {
+            return res.status(404).json({ success: false, message: 'Record not found' });
+        }
+
+        res.json({ success: true, message: 'Record deleted successfully' });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+};
+
