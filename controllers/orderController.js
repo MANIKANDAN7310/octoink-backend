@@ -69,11 +69,26 @@ export const getPurchases = async (req, res) => {
             .populate('userId', 'name email')
             .populate('items.productId')
             .sort({ createdAt: -1 });
-        res.json({ success: true, purchases: orders });
+
+        // Map to format expected by dashboard
+        const mappedPurchases = orders.map(order => ({
+            _id: order._id,
+            id: order._id, // Dashboard uses p.id in some places
+            productName: order.items[0]?.title || "Digital Product",
+            clientName: order.clientInfo?.name || order.userId?.name || "Unknown",
+            clientEmail: order.clientInfo?.email || order.userId?.email || "N/A",
+            amount: order.totalAmount || 0,
+            paymentId: order.razorpayPaymentId || "N/A",
+            downloadedAt: order.createdAt,
+            status: order.status
+        }));
+
+        res.json({ success: true, purchases: mappedPurchases });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
 };
+
 
 export const deleteOrder = async (req, res) => {
     try {

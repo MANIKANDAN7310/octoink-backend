@@ -108,11 +108,12 @@ app.use("/api/stats", statsRoutes);
 app.use("/api/payment", paymentRoutes);
 
 // ─── Dashboard Specific Routes ────────────────────────
-import { getClients, deleteClient } from "./controllers/authController.js";
+import { getClients, deleteClient, getClientById } from "./controllers/authController.js";
 import { getPurchases } from "./controllers/orderController.js";
 import { getDownloadHistory } from "./controllers/productController.js";
 
 app.get("/api/clients", getClients);
+app.get("/api/clients/:id", getClientById);
 app.delete("/api/clients/:id", deleteClient);
 app.get("/api/purchases", getPurchases);
 app.get("/api/downloads/history", getDownloadHistory);

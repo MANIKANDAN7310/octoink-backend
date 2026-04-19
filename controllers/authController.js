@@ -34,12 +34,50 @@ export const login = async (req, res) => {
 
 export const getClients = async (req, res) => {
     try {
-        const clients = await User.find().select("-password").sort({ createdAt: -1 });
-        res.json({ success: true, clients });
+        const users = await User.find().select("-password").sort({ createdAt: -1 });
+        const mappedClients = users.map(user => ({
+            _id: user._id,
+            client_name: user.name,
+            email: user.email,
+            company_name: "Individual",
+            location: "N/A",
+            totalDownloads: user.downloadHistory?.length || 0,
+            createdAt: user.createdAt
+        }));
+        res.json({ success: true, clients: mappedClients });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
 };
+
+export const getClientById = async (req, res) => {
+    try {
+        const user = await User.findById(req.params.id).select("-password");
+        if (!user) return res.status(404).json({ success: false, message: "Client not found" });
+        
+        // Map to format expected by dashboard detail view
+        const mappedClient = {
+            _id: user._id,
+            client_name: user.name,
+            email: user.email,
+            company_name: "Individual",
+            location: "N/A",
+            createdAt: user.createdAt,
+            purchases: (user.downloadHistory || []).map(d => ({
+                id: d._id,
+                productName: d.productTitle,
+                amount: 0, // We don't store amount in downloadHistory, maybe link to orders?
+                paymentId: d.paymentId,
+                downloadedAt: d.downloadedAt
+            }))
+        };
+        
+        res.json({ success: true, client: mappedClient });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+};
+
 
 export const deleteClient = async (req, res) => {
     try {
@@ -49,4 +87,15 @@ export const deleteClient = async (req, res) => {
         res.status(500).json({ success: false, message: err.message });
     }
 };
+
+export const getProfile = async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id).select("-password");
+        if (!user) return res.status(404).json({ success: false, message: "User not found" });
+        res.json({ success: true, user });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+};
+
 
