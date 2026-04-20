@@ -18,6 +18,7 @@ import paymentRoutes from "./routes/paymentRoutes.js";
 import Banner from "./models/Banner.js";
 import Settings from "./models/Settings.js";
 import Contact from "./models/Contact.js";
+import { sendEmail } from "./utils/sendEmail.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -213,6 +214,23 @@ app.post("/api/contact", async (req, res) => {
     try {
         const contact = new Contact(req.body);
         await contact.save();
+
+        // Send email notification
+        const { name, email, service, message } = req.body;
+        await sendEmail({
+            subject: `New Contact Form Submission from ${name}`,
+            text: `You have received a new message from the contact form.\n\nName: ${name}\nEmail: ${email}\nService: ${service || 'N/A'}\nMessage: ${message}`,
+            html: `<p>You have received a new message from the contact form.</p>
+                   <ul>
+                       <li><strong>Name:</strong> ${name}</li>
+                       <li><strong>Email:</strong> ${email}</li>
+                       <li><strong>Service:</strong> ${service || 'N/A'}</li>
+                   </ul>
+                   <p><strong>Message:</strong></p>
+                   <p>${message}</p>`,
+            replyTo: email
+        });
+
         res.status(201).json({ success: true, contact });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });

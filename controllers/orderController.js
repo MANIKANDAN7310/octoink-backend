@@ -1,5 +1,6 @@
 import Order from '../models/Order.js';
 import CustomDesign from '../models/CustomDesign.js';
+import { sendEmail } from '../utils/sendEmail.js';
 
 export const getOrders = async (req, res) => {
     try {
@@ -38,6 +39,23 @@ export const createCustomDesign = async (req, res) => {
         });
 
         await newDesign.save();
+
+        // Send email notification for custom design
+        await sendEmail({
+            subject: `New Custom Design Order from ${email}`,
+            text: `You have received a new custom design order.\n\nEmail: ${email}\nCategory: ${category || 'N/A'}\nDimensions: ${width || 'N/A'}x${height || 'N/A'}\nColors: ${colors || 'N/A'}\nRequirement: ${requirement || 'None'}`,
+            html: `<p>You have received a new custom design order.</p>
+                   <ul>
+                       <li><strong>Email:</strong> ${email}</li>
+                       <li><strong>Category:</strong> ${category || 'N/A'}</li>
+                       <li><strong>Dimensions:</strong> ${width || 'N/A'}x${height || 'N/A'}</li>
+                       <li><strong>Colors:</strong> ${colors || 'N/A'}</li>
+                   </ul>
+                   <p><strong>Requirement:</strong></p>
+                   <p>${requirement || 'None'}</p>`,
+            replyTo: email
+        });
+
         res.status(201).json({ success: true, customDesignId: newDesign._id });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
