@@ -40,10 +40,31 @@ export const createCustomDesign = async (req, res) => {
 
         await newDesign.save();
 
+        // Prepare image links for email
+        let imagesText = '';
+        let imagesHtml = '';
+
+        if (customDesignUrl) {
+            imagesText += `\n\nMain Design File: ${customDesignUrl}`;
+            imagesHtml += `<h3>Main Design File:</h3>
+                           <p><a href="${customDesignUrl}" target="_blank">Download / View Main File</a></p>
+                           <img src="${customDesignUrl}" alt="Main Design" style="max-width: 100%; max-height: 400px; height: auto;" />`;
+        }
+
+        if (refFiles && refFiles.length > 0) {
+            imagesText += `\n\nReference Files:\n`;
+            imagesHtml += `<h3>Reference Files:</h3>`;
+            refFiles.forEach((file, index) => {
+                imagesText += `${index + 1}. ${file.path} (${file.originalName})\n`;
+                imagesHtml += `<p><a href="${file.path}" target="_blank">Download / View Reference ${index + 1} (${file.originalName})</a></p>
+                               <img src="${file.path}" alt="Reference ${index + 1}" style="max-width: 100%; max-height: 400px; height: auto; margin-bottom: 10px;" />`;
+            });
+        }
+
         // Send email notification for custom design
         await sendEmail({
             subject: `New Custom Design Order from ${email}`,
-            text: `You have received a new custom design order.\n\nEmail: ${email}\nCategory: ${category || 'N/A'}\nDimensions: ${width || 'N/A'}x${height || 'N/A'}\nColors: ${colors || 'N/A'}\nRequirement: ${requirement || 'None'}`,
+            text: `You have received a new custom design order.\n\nEmail: ${email}\nCategory: ${category || 'N/A'}\nDimensions: ${width || 'N/A'}x${height || 'N/A'}\nColors: ${colors || 'N/A'}\nRequirement: ${requirement || 'None'}${imagesText}`,
             html: `<p>You have received a new custom design order.</p>
                    <ul>
                        <li><strong>Email:</strong> ${email}</li>
@@ -52,7 +73,9 @@ export const createCustomDesign = async (req, res) => {
                        <li><strong>Colors:</strong> ${colors || 'N/A'}</li>
                    </ul>
                    <p><strong>Requirement:</strong></p>
-                   <p>${requirement || 'None'}</p>`,
+                   <p>${requirement || 'None'}</p>
+                   <hr />
+                   ${imagesHtml}`,
             replyTo: email
         });
 
