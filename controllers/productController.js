@@ -26,6 +26,7 @@ export const createProduct = async (req, res) => {
         // Multer with Cloudinary storage will provide the URL in req.file.path or req.files
         const imagePath = req.files?.image?.[0] ? req.files.image[0].path : "";
         const extraImagePaths = (req.files?.extraImages || []).map(f => f.path);
+        const filePath = req.files?.file?.[0] ? req.files.file[0].path : "";
         
         // Note: For files (like PDFs), you might still want local storage or another Cloudinary folder
         // The user said "Do NOT store images locally". They didn't mention other files.
@@ -39,7 +40,8 @@ export const createProduct = async (req, res) => {
             description, 
             tags, 
             image: imagePath, 
-            extraImages: extraImagePaths 
+            extraImages: extraImagePaths,
+            file: filePath
         });
         
         await product.save();
@@ -54,6 +56,7 @@ export const updateProduct = async (req, res) => {
         const updates = { ...req.body };
         if (req.files?.image?.[0]) updates.image = req.files.image[0].path;
         if (req.files?.extraImages) updates.extraImages = req.files.extraImages.map(f => f.path);
+        if (req.files?.file?.[0]) updates.file = req.files.file[0].path;
         
         const product = await Product.findByIdAndUpdate(req.params.id, updates, { new: true });
         if (!product) return res.status(404).json({ success: false, message: "Not found" });

@@ -19,7 +19,8 @@ const storage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
     folder: 'octoink_products',
-    allowed_formats: ['jpg', 'png', 'jpeg', 'webp'],
+    allowed_formats: ['jpg', 'png', 'jpeg', 'webp', 'zip', 'pdf', 'svg'],
+    resource_type: 'auto',
   },
 });
 
