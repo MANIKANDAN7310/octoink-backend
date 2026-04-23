@@ -159,4 +159,8 @@ router.put('/:id', handleUpload, async (req, res) => {
 });
 router.delete('/:id', deleteProduct);
 
+import verifyToken from '../middleware/auth.js';
+import { downloadProductFile } from '../controllers/productController.js';
+router.get('/download/:id', verifyToken, downloadProductFile);
+
 export default router;

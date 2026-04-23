@@ -81,10 +81,25 @@ export const verifyPayment = async (req, res) => {
                 return res.status(404).json({ success: false, message: 'Order not found in database' });
             }
 
+            // Populate product details to help the frontend identify digital files
+            const populatedOrder = await Order.findById(order._id).populate({
+                path: 'items.productId',
+                select: '+file'
+            });
+
+            const orderObj = populatedOrder.toObject();
+            orderObj.items = orderObj.items.map(item => {
+                if (item.productId) {
+                    item.hasFile = !!item.productId.file;
+                    delete item.productId.file; // Still hide the raw URL
+                }
+                return item;
+            });
+
             res.json({
                 success: true,
                 message: 'Payment verified successfully',
-                order
+                order: orderObj
             });
 
             // Post-payment updates (non-blocking)

@@ -11,8 +11,8 @@ export const register = async (req, res) => {
         const hashedPassword = await bcrypt.hash(password, 10);
         const user = new User({ name, email, password: hashedPassword });
         await user.save();
-        const token = jwt.sign({ id: user._id, email: user.email }, process.env.JWT_SECRET, { expiresIn: "7d" });
-        res.status(201).json({ success: true, token, user: { name: user.name, email: user.email } });
+        const token = jwt.sign({ id: user._id, email: user.email, isAdmin: user.isAdmin }, process.env.JWT_SECRET, { expiresIn: "7d" });
+        res.status(201).json({ success: true, token, user: { name: user.name, email: user.email, isAdmin: user.isAdmin } });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
@@ -25,8 +25,8 @@ export const login = async (req, res) => {
         if (!user) return res.status(400).json({ success: false, message: "User not found" });
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) return res.status(400).json({ success: false, message: "Invalid credentials" });
-        const token = jwt.sign({ id: user._id, email: user.email }, process.env.JWT_SECRET, { expiresIn: "7d" });
-        res.json({ success: true, token, user: { name: user.name, email: user.email } });
+        const token = jwt.sign({ id: user._id, email: user.email, isAdmin: user.isAdmin }, process.env.JWT_SECRET, { expiresIn: "7d" });
+        res.json({ success: true, token, user: { name: user.name, email: user.email, isAdmin: user.isAdmin } });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }

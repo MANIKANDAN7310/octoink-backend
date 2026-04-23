@@ -9,7 +9,7 @@ const productSchema = new mongoose.Schema({
     tags: { type: String },
     image: { type: String }, // Cloudinary URL
     extraImages: [{ type: String }],
-    file: { type: String },
+    file: { type: String, select: false },
     downloads: { type: Number, default: 0 },
     createdAt: { type: Date, default: Date.now },
 });

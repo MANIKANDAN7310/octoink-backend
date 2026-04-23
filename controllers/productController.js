@@ -1,9 +1,34 @@
 import Product from '../models/Product.js';
+import Order from '../models/Order.js';
+import path from 'path';
+import fs from 'fs';
+import { Readable } from 'stream';
+import jwt from 'jsonwebtoken';
 
 export const getProducts = async (req, res) => {
     try {
-        const products = await Product.find().sort({ createdAt: -1 });
-        res.json({ success: true, products });
+        // Try to identify admin if token is provided
+        let isAdmin = false;
+        const token = req.headers.authorization?.split(" ")[1];
+        if (token) {
+            try {
+                const decoded = jwt.verify(token, process.env.JWT_SECRET);
+                isAdmin = decoded.isAdmin;
+            } catch (e) {}
+        }
+
+        const products = await Product.find().sort({ createdAt: -1 }).select('+file');
+        const productsWithFlag = products.map(p => {
+            const productObj = p.toObject();
+            productObj.hasFile = !!productObj.file;
+            
+            // Only expose the raw file URL to admins
+            if (!isAdmin) {
+                delete productObj.file;
+            }
+            return productObj;
+        });
+        res.json({ success: true, products: productsWithFlag });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
@@ -11,9 +36,26 @@ export const getProducts = async (req, res) => {
 
 export const getProductById = async (req, res) => {
     try {
-        const product = await Product.findById(req.params.id);
+        let isAdmin = false;
+        const token = req.headers.authorization?.split(" ")[1];
+        if (token) {
+            try {
+                const decoded = jwt.verify(token, process.env.JWT_SECRET);
+                isAdmin = decoded.isAdmin;
+            } catch (e) {}
+        }
+
+        const product = await Product.findById(req.params.id).select('+file');
         if (!product) return res.status(404).json({ success: false, message: "Not found" });
-        res.json({ success: true, product });
+        
+        const productObj = product.toObject();
+        productObj.hasFile = !!productObj.file;
+        
+        if (!isAdmin) {
+            delete productObj.file;
+        }
+
+        res.json({ success: true, product: productObj });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
@@ -102,5 +144,70 @@ export const getDownloadHistory = async (req, res) => {
         res.json({ success: true, downloads: allDownloads });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
+    }
+};
+
+export const downloadProductFile = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const userId = req.user.id;
+
+        // 1. Check if product exists (explicitly select hidden 'file' field)
+        const product = await Product.findById(id).select('+file');
+        if (!product) {
+            return res.status(404).json({ success: false, message: "Product not found" });
+        }
+
+        if (!product.file) {
+            return res.status(400).json({ success: false, message: "No digital file associated with this product" });
+        }
+
+        // 2. Verify purchase (unless admin)
+        if (!req.user.isAdmin) {
+            const purchase = await Order.findOne({
+                userId,
+                status: 'Completed',
+                'items.productId': id
+            });
+
+            if (!purchase) {
+                return res.status(403).json({ 
+                    success: false, 
+                    message: "Purchase required to download this file. Please buy the product first." 
+                });
+            }
+        }
+
+        // 3. Fetch and stream the file from Cloudinary (or local storage if path is relative)
+        const fileUrl = product.file;
+        
+        console.log(`[Download] Serving file for product: ${product.title} to user: ${userId}`);
+
+        // If it's a remote URL (Cloudinary)
+        if (fileUrl.startsWith('http')) {
+            const response = await fetch(fileUrl);
+            if (!response.ok) throw new Error(`Failed to fetch file from storage: ${response.statusText}`);
+
+            // Get filename from URL or title
+            const filename = product.title.replace(/[^a-z0-9]/gi, '_').toLowerCase() + ".zip";
+            
+            res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+            res.setHeader('Content-Type', response.headers.get('content-type') || 'application/zip');
+
+            // Pipe the web stream to the Node response
+            Readable.fromWeb(response.body).pipe(res);
+        } else {
+            // Local file (if any)
+            const absolutePath = path.resolve(fileUrl);
+            if (fs.existsSync(absolutePath)) {
+                res.download(absolutePath);
+            } else {
+                res.status(404).json({ success: false, message: "File not found on server" });
+            }
+        }
+
+    } catch (err) {
+        console.error("Download Error:", err);
+        res.status(500).json({ success: false, message: "Error processing download: " + err.message });
     }
 };
