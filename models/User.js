@@ -14,6 +14,7 @@ const userSchema = new mongoose.Schema({
     ],
     createdAt: { type: Date, default: Date.now },
     isAdmin: { type: Boolean, default: false },
+    currency: { type: String, default: "USD" }, // 'USD' or 'INR'
 });
 
 export default mongoose.model("User", userSchema);

@@ -10,8 +10,10 @@ const orderSchema = new mongoose.Schema({
             price: Number,
         },
     ],
-    totalAmount: { type: Number, required: true },
+    totalAmount: { type: Number, required: true }, // Amount in INR
     currency: { type: String, default: "INR" },
+    displayAmount: { type: Number }, // Original amount shown to user
+    displayCurrency: { type: String }, // USD or INR
     razorpayOrderId: { type: String, required: true },
     razorpayPaymentId: { type: String },
     razorpaySignature: { type: String },

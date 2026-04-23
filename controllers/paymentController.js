@@ -1,13 +1,24 @@
 import Razorpay from 'razorpay';
 import crypto from 'crypto';
 import Order from '../models/Order.js';
+import { convertToINR } from '../utils/currencyUtils.js';
 
 export const createOrder = async (req, res) => {
     try {
-        const { amount, currency, items, clientInfo, orderType } = req.body;
+        let { amount, currency, items, clientInfo, orderType } = req.body;
 
         if (!amount || !items) {
             return res.status(400).json({ success: false, message: 'Invalid request data' });
+        }
+
+        const displayAmount = amount;
+        const displayCurrency = currency || "USD";
+        let finalAmountINR = amount;
+
+        // If currency is USD, convert to INR for Razorpay
+        if (displayCurrency === 'USD') {
+            finalAmountINR = await convertToINR(amount);
+            console.log(`[Payment] Converting ${amount} USD to ${finalAmountINR} INR for Razorpay`);
         }
 
         const instance = new Razorpay({
@@ -16,8 +27,8 @@ export const createOrder = async (req, res) => {
         });
 
         const options = {
-            amount: Math.round(amount * 100), // amount in smallest currency unit
-            currency: currency || "INR",
+            amount: Math.round(finalAmountINR * 100), // amount in paise
+            currency: "INR", // Razorpay only supports INR for domestic Indian payments
             receipt: `receipt_order_${Date.now()}`,
         };
 
@@ -31,8 +42,10 @@ export const createOrder = async (req, res) => {
         const newOrder = new Order({
             userId: req.user.id,
             items,
-            totalAmount: amount,
-            currency: currency || "INR",
+            totalAmount: finalAmountINR, // Store the INR amount paid
+            currency: "INR",
+            displayAmount: displayAmount, // Store the original amount shown (e.g. 23)
+            displayCurrency: displayCurrency, // Store the original currency (e.g. USD)
             razorpayOrderId: order.id,
             status: 'Pending',
             orderType: orderType || 'Product',

@@ -98,4 +98,25 @@ export const getProfile = async (req, res) => {
     }
 };
 
+export const updateProfile = async (req, res) => {
+    try {
+        const { name, email, currency } = req.body;
+        const updates = {};
+        if (name) updates.name = name;
+        if (email) updates.email = email;
+        if (currency) updates.currency = currency;
+
+        const user = await User.findByIdAndUpdate(
+            req.user.id,
+            { $set: updates },
+            { new: true }
+        ).select("-password");
+
+        if (!user) return res.status(404).json({ success: false, message: "User not found" });
+        res.json({ success: true, user });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+};
+
 
