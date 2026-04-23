@@ -5,6 +5,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import mongoose from "mongoose";
 import connectDB from "./config/db.js";
+import fs from "fs";
 
 // Routes
 import authRoutes from "./routes/authRoutes.js";
@@ -69,9 +70,10 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 //  MongoDB Connection with Reconnection Logic
 // ═══════════════════════════════════════════════════════
 connectDB().then(() => {
-    app.listen(PORT, () => {
+    const server = app.listen(PORT, () => {
         console.log(`🚀 Server running on port ${PORT}`);
     });
+    server.timeout = 300000; // 5 minutes for large uploads
 });
 
 // Monitor MongoDB connection
@@ -295,7 +297,7 @@ app.use((err, req, res, next) => {
     console.error("🔥 Unhandled error:", err.stack || err.message);
     res.status(500).json({
         success: false,
-        message: "Internal server error",
+        message: err.message || "Internal server error",
     });
 });
 
