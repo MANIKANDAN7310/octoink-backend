@@ -6,7 +6,11 @@ const verifyToken = (req, res, next) => {
     try {
         req.user = jwt.verify(token, process.env.JWT_SECRET);
         next();
-    } catch {
+    } catch (err) {
+        console.error("JWT Verify Error:", err.message);
+        if (err.name === 'TokenExpiredError') {
+            return res.status(401).json({ success: false, message: "Token expired. Please login again." });
+        }
         res.status(401).json({ success: false, message: "Invalid token" });
     }
 };
