@@ -268,7 +268,7 @@ app.get("/api/health", (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════
-//  Keep-Alive Ping (prevents Render free tier sleep)
+//  Keep-Alive Ping (prevents Render free tier sleep) & Cron Jobs
 // ═══════════════════════════════════════════════════════
 const SELF_URL = process.env.VITE_API_URL || `http://localhost:${PORT}`;
 
@@ -279,6 +279,17 @@ setInterval(() => {
             .catch(() => console.log("⚠️ Keep-alive ping failed (this is okay on startup)"));
     }
 }, 14 * 60 * 1000); // Every 14 minutes (Render sleeps after 15)
+
+// Reconciliation Cron Job
+import { reconcilePendingPayments } from './jobs/reconciliation.js';
+setInterval(() => {
+    reconcilePendingPayments().catch(err => console.error(JSON.stringify({ type: "cron_reconcile_error", error: err.message })));
+}, 60 * 60 * 1000); // Run once every hour
+
+// Run once 5 minutes after startup
+setTimeout(() => {
+    reconcilePendingPayments().catch(err => console.error(JSON.stringify({ type: "startup_reconcile_error", error: err.message })));
+}, 5 * 60 * 1000);
 
 // ═══════════════════════════════════════════════════════
 //  Global Error Handlers
