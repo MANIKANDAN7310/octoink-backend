@@ -82,7 +82,7 @@ const limiter = rateLimit({
 app.use("/api/", limiter);
 
 // Request Timeout
-app.use(timeout("15s"));
+app.use(timeout("60s")); // Increased to 60s for uploads
 app.use((req, res, next) => {
     if (!req.timedout) next();
 });
@@ -177,6 +177,28 @@ app.post("/api/banners", uploadBanner.single("image"), async (req, res) => {
         await banner.save();
         res.status(201).json({ success: true, banner });
     } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+});
+
+app.put("/api/banners/reorder", async (req, res) => {
+    try {
+        const { banners } = req.body;
+        if (!banners || !Array.isArray(banners)) {
+            return res.status(400).json({ success: false, message: "Invalid banners data" });
+        }
+        
+        const bulkOps = banners.map((b, index) => ({
+            updateOne: {
+                filter: { _id: b._id },
+                update: { $set: { order: b.order ?? index } }
+            }
+        }));
+        
+        await Banner.bulkWrite(bulkOps);
+        res.json({ success: true, message: "Order updated" });
+    } catch (err) {
+        console.error("Reorder error:", err.message);
         res.status(500).json({ success: false, message: err.message });
     }
 });
