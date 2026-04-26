@@ -2,6 +2,7 @@ import Razorpay from 'razorpay';
 import crypto from 'crypto';
 import Order from '../models/Order.js';
 import Product from '../models/Product.js';
+import User from '../models/User.js';
 import { convertToINR } from '../utils/currencyUtils.js';
 import { sendAlert } from '../utils/alerting.js';
 
@@ -253,9 +254,6 @@ export const verifyPayment = async (req, res) => {
                 );
 
                 if (deliveryLock) {
-                    const Product = (await import('../models/Product.js')).default;
-                    const User = (await import('../models/User.js')).default;
-
                     // 1. Increment product download counts
                     for (const item of order.items) {
                         if (item.productId) {
@@ -351,9 +349,6 @@ export const webhook = async (req, res) => {
                     );
 
                     if (deliveryLock) {
-                        const Product = (await import('../models/Product.js')).default;
-                        const User = (await import('../models/User.js')).default;
-
                         // Increment downloads
                     for (const item of order.items) {
                         if (item.productId) {
@@ -373,9 +368,10 @@ export const webhook = async (req, res) => {
                             $push: { downloadHistory: { $each: downloadRecords } }
                         });
                     }
-                } catch (postErr) {
-                    console.error(JSON.stringify({ type: "payment_webhook_post_update_error", traceId: order.traceId, error: postErr.message }));
                 }
+            } catch (postErr) {
+                console.error(JSON.stringify({ type: "payment_webhook_post_update_error", traceId: order.traceId, error: postErr.message }));
+            }
             } else {
                 console.log(JSON.stringify({ type: "payment_webhook_skip", orderId, message: "Order already completed, event replayed, or not found." }));
             }
