@@ -2,10 +2,27 @@ import express from 'express';
 import Order from '../models/Order.js';
 import User from '../models/User.js';
 import CustomDesign from '../models/CustomDesign.js';
+import Product from '../models/Product.js';
+import { getExchangeRate } from '../utils/currencyUtils.js';
 
 const router = express.Router();
 
-import Product from '../models/Product.js';
+// Exchange rate endpoint for frontend currency display conversion
+router.get('/exchange-rate', async (req, res) => {
+    try {
+        let rate = await getExchangeRate();
+        rate = rate && rate > 0 ? rate : 83; // Final safety fallback
+        
+        // Optimize with caching headers (1 hour)
+        res.set('Cache-Control', 'public, max-age=3600');
+        res.set('ETag', `"${rate}"`);
+        
+        res.json({ success: true, rate, base: 'USD', target: 'INR' });
+    } catch (err) {
+        // Return fallback instead of crashing
+        res.json({ success: true, rate: 83, base: 'USD', target: 'INR', fallback: true });
+    }
+});
 
 router.get('/summary', async (req, res) => {
     try {

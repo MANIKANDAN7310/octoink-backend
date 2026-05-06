@@ -7,16 +7,17 @@ const orderSchema = new mongoose.Schema({
             productId: { type: mongoose.Schema.Types.ObjectId, ref: "Product" },
             title: String,
             quantity: { type: Number, default: 1 },
-            price: Number,
+            price: Number, // Price in INR
         },
     ],
-    totalAmount: { type: Number, required: true }, // Amount in INR
-    currency: { type: String, default: "INR" },
-    displayAmount: { type: Number }, // Original base amount shown to user (USD)
-    displayCurrency: { type: String }, // Base currency (e.g. USD)
-    originalCurrency: { type: String }, // User requested currency
-    finalCurrency: { type: String }, // Actual currency charged by Razorpay
-    exchangeRateUsed: { type: Number, default: 1 }, // Exchange rate used for conversion
+    totalAmount: { type: Number, required: true }, // Amount in INR (source of truth)
+    currency: { type: String, default: "INR" }, // Always INR
+    // Legacy fields kept for backward compatibility with existing orders
+    displayAmount: { type: Number },
+    displayCurrency: { type: String },
+    originalCurrency: { type: String },
+    finalCurrency: { type: String },
+    exchangeRateUsed: { type: Number, default: 1 },
     traceId: { type: String, required: true, unique: true },
     razorpayOrderId: { type: String, required: true, unique: true },
     razorpayPaymentId: { type: String },

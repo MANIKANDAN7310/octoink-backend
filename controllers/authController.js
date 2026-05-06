@@ -93,18 +93,40 @@ export const refreshAccessToken = async (req, res) => {
 
 export const getClients = async (req, res) => {
     try {
-        const users = await User.find().select("-password").sort({ createdAt: -1 });
+        // 1. Get emails/IDs of users with active engagement
+        const [orderEmails, designEmails, clientEmails, orderUserIds] = await Promise.all([
+            Order.distinct("clientInfo.email"),
+            CustomDesign.distinct("email"),
+            Client.distinct("email"),
+            Order.distinct("userId")
+        ]);
+
+        const activeEmails = [...new Set([...orderEmails, ...designEmails, ...clientEmails])].filter(Boolean);
+        const activeUserIds = orderUserIds.filter(Boolean);
+
+        // 2. Find users who match engagement criteria
+        const users = await User.find({
+            $or: [
+                { email: { $in: activeEmails } },
+                { _id: { $in: activeUserIds } },
+                { downloadHistory: { $exists: true, $not: { $size: 0 } } }
+            ],
+            isAdmin: { $ne: true } // Usually exclude admins from client list
+        }).select("-password").sort({ createdAt: -1 });
+
         const mappedClients = users.map(user => ({
             _id: user._id,
             client_name: user.name,
             email: user.email,
-            company_name: "Individual",
+            company_name: "Individual", // Could be enhanced if User model had company
             location: "N/A",
             totalDownloads: user.downloadHistory?.length || 0,
             createdAt: user.createdAt
         }));
+
         res.json({ success: true, clients: mappedClients });
     } catch (err) {
+        console.error("getClients error:", err);
         res.status(500).json({ success: false, message: err.message });
     }
 };
@@ -138,8 +160,13 @@ export const getClientById = async (req, res) => {
 
 export const deleteClient = async (req, res) => {
     try {
-        await User.findByIdAndDelete(req.params.id);
-        res.json({ success: true, message: 'Client deleted' });
+        const { id } = req.params;
+        if (id === 'delete-all') {
+            return res.status(400).json({ success: false, message: 'Invalid ID' });
+        }
+
+        await User.findByIdAndDelete(id);
+        res.json({ success: true, message: 'Client deleted successfully' });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
@@ -147,23 +174,20 @@ export const deleteClient = async (req, res) => {
 
 export const deleteAllClients = async (req, res) => {
     try {
-        // Delete all users except admins
-        await User.deleteMany({ isAdmin: { $ne: true } });
-        
-        // Delete all client tracking records
+        // As requested: Delete all client records properly
         await Client.deleteMany({});
         
-        // Delete all related transactional data
+        // Also clearing related data to maintain system integrity as per previous requirements
+        await User.deleteMany({ isAdmin: { $ne: true } });
         await CustomDesign.deleteMany({});
         await Download.deleteMany({});
         await Order.deleteMany({});
         
-        res.json({ 
+        res.status(200).json({ 
             success: true, 
-            message: 'All client records and related data cleared successfully (Admin accounts preserved)' 
+            message: 'All clients deleted successfully' 
         });
     } catch (err) {
-        console.error("Delete All Clients Error:", err);
         res.status(500).json({ success: false, message: err.message });
     }
 };

@@ -3,21 +3,28 @@ import crypto from 'crypto';
 import Order from '../models/Order.js';
 import Product from '../models/Product.js';
 import User from '../models/User.js';
-import { convertToINR } from '../utils/currencyUtils.js';
 import { sendAlert } from '../utils/alerting.js';
+
+/**
+ * PAYMENT CONTROLLER — INR-ONLY SYSTEM
+ * 
+ * CORE RULE: All payments are processed in INR only.
+ * Product prices are stored in INR in the database.
+ * Currency switching on the frontend is for DISPLAY ONLY.
+ * Razorpay always receives INR amounts.
+ */
 
 export const createOrder = async (req, res) => {
     try {
-        let { currency, items, clientInfo, orderType, customDesignId } = req.body;
+        let { items, clientInfo, orderType, customDesignId } = req.body;
 
         if (!items || !Array.isArray(items) || items.length === 0) {
             return res.status(400).json({ success: false, message: 'Invalid request data' });
         }
 
         const traceId = crypto.randomUUID();
-        const customDesignPrice = parseFloat(process.env.CUSTOM_DESIGN_PRICE) || 5.99;
-        const displayCurrency = currency === 'INR' ? 'INR' : 'USD'; // Validate currency
-        let calculatedAmountUSD = 0;
+        const customDesignPriceINR = parseFloat(process.env.CUSTOM_DESIGN_PRICE_INR) || 499;
+        let calculatedAmountINR = 0;
 
         // Idempotency: Check for existing pending orders to prevent duplicates
         if (orderType === 'Custom' && customDesignId) {
@@ -28,7 +35,7 @@ export const createOrder = async (req, res) => {
                     success: true,
                     orderId: existingOrder.razorpayOrderId,
                     amount: Math.round(existingOrder.totalAmount * 100),
-                    currency: existingOrder.currency
+                    currency: 'INR'
                 });
             }
         } else if (orderType !== 'Custom') {
@@ -42,7 +49,7 @@ export const createOrder = async (req, res) => {
             });
             const duplicateOrder = existingOrders.find(o => {
                 const oIds = o.items.map(i => i.productId.toString()).sort().join(',');
-                return oIds === productIds && o.displayCurrency === displayCurrency; // Match items and currency request
+                return oIds === productIds;
             });
             if (duplicateOrder && duplicateOrder.razorpayOrderId) {
                 console.log(JSON.stringify({ type: "payment_idempotency_hit", orderId: duplicateOrder.razorpayOrderId, message: "Returning existing product order" }));
@@ -50,16 +57,17 @@ export const createOrder = async (req, res) => {
                     success: true,
                     orderId: duplicateOrder.razorpayOrderId,
                     amount: Math.round(duplicateOrder.totalAmount * 100),
-                    currency: duplicateOrder.currency
+                    currency: 'INR'
                 });
             }
         }
 
         if (orderType === 'Custom') {
-            calculatedAmountUSD = customDesignPrice; // Use config base USD price
-            if (items[0]) items[0].price = customDesignPrice;
+            calculatedAmountINR = customDesignPriceINR;
+            if (items[0]) items[0].price = customDesignPriceINR;
         } else {
             // Fetch products to verify price and existence
+            // CRITICAL: Use DB price (INR), ignore any price sent from frontend
             for (let item of items) {
                 if (!item.productId) {
                     return res.status(400).json({ success: false, message: 'Product ID missing in items' });
@@ -68,35 +76,27 @@ export const createOrder = async (req, res) => {
                 if (!product) {
                     return res.status(404).json({ success: false, message: `Product not found: ${item.productId}` });
                 }
-                // Overwrite the price from frontend with the DB price (USD)
+                // Overwrite the price from frontend with the DB price (INR)
                 item.price = product.price;
                 item.title = product.title;
-                calculatedAmountUSD += product.price * (item.quantity || 1);
+                calculatedAmountINR += product.price * (item.quantity || 1);
             }
         }
 
-        if (calculatedAmountUSD <= 0) {
+        if (calculatedAmountINR <= 0) {
             return res.status(400).json({ success: false, message: 'Invalid total amount' });
         }
 
-        let orderAmount;
-        let orderCurrency;
-        let totalAmountPaid;
-        let exchangeRateUsed = 1;
+        // ALWAYS charge in INR — this is the core rule
+        const orderAmountPaise = Math.round(calculatedAmountINR * 100);
 
-        if (displayCurrency === 'INR') {
-            const amountINR = await convertToINR(calculatedAmountUSD);
-            orderAmount = Math.round(amountINR * 100); // amount in paise
-            orderCurrency = 'INR';
-            totalAmountPaid = amountINR;
-            exchangeRateUsed = amountINR / calculatedAmountUSD;
-            console.log(JSON.stringify({ type: "payment_conversion", traceId, baseUSD: calculatedAmountUSD, convertedINR: amountINR, rate: exchangeRateUsed }));
-        } else {
-            orderAmount = Math.round(calculatedAmountUSD * 100); // amount in cents
-            orderCurrency = 'USD';
-            totalAmountPaid = calculatedAmountUSD;
-            console.log(JSON.stringify({ type: "payment_processing", traceId, baseUSD: calculatedAmountUSD, currency: 'USD' }));
-        }
+        console.log(JSON.stringify({ 
+            type: "payment_processing", 
+            traceId, 
+            amountINR: calculatedAmountINR, 
+            amountPaise: orderAmountPaise,
+            currency: 'INR' 
+        }));
 
         const instance = new Razorpay({
             key_id: process.env.RAZORPAY_KEY_ID,
@@ -104,55 +104,42 @@ export const createOrder = async (req, res) => {
         });
 
         const options = {
-            amount: orderAmount,
-            currency: orderCurrency,
+            amount: orderAmountPaise,
+            currency: 'INR',
             receipt: `receipt_order_${Date.now()}`,
         };
 
-        let order;
-        try {
-            order = await instance.orders.create(options);
-        } catch (err) {
-            console.error(JSON.stringify({ type: "payment_create_error", traceId, error: err.message, description: err.description }));
-            // Fallback for USD error if Razorpay rejects international payment
-            if (err.description && err.description.toLowerCase().includes("currency") && orderCurrency === 'USD') {
-                console.log(JSON.stringify({ type: "payment_fallback", traceId, message: "Razorpay rejected USD. Falling back to INR." }));
-                const amountINR = await convertToINR(calculatedAmountUSD);
-                orderAmount = Math.round(amountINR * 100);
-                orderCurrency = 'INR';
-                totalAmountPaid = amountINR;
-                exchangeRateUsed = amountINR / calculatedAmountUSD;
-                options.amount = orderAmount;
-                options.currency = orderCurrency;
-                order = await instance.orders.create(options);
-            } else {
-                throw err;
-            }
-        }
+        const order = await instance.orders.create(options);
 
         if (!order) {
             return res.status(500).json({ success: false, message: 'Some error occurred with Razorpay' });
         }
 
-        console.log(JSON.stringify({ type: "payment_order_created", traceId, orderId: order.id, userId: req.user.id, amount: order.amount, currency: order.currency }));
+        console.log(JSON.stringify({ 
+            type: "payment_order_created", 
+            traceId, 
+            orderId: order.id, 
+            userId: req.user.id, 
+            amount: order.amount, 
+            currency: 'INR' 
+        }));
 
         // Save pending order to DB
         const newOrder = new Order({
             traceId,
             userId: req.user.id,
             items,
-            totalAmount: totalAmountPaid, // Store the actual amount paid in the order currency
-            currency: orderCurrency,
-            displayAmount: calculatedAmountUSD, // Base USD amount
-            displayCurrency: 'USD',
-            originalCurrency: displayCurrency,
-            finalCurrency: orderCurrency,
-            exchangeRateUsed: exchangeRateUsed,
+            totalAmount: calculatedAmountINR, // Amount in INR
+            currency: 'INR',
             razorpayOrderId: order.id,
             status: 'Pending',
             orderType: orderType || 'Product',
             clientInfo,
-            customDesignId
+            customDesignId,
+            // Snapshot of frontend display for future-proofing
+            displayAmount: req.body.displayAmount || null,
+            displayCurrency: req.body.displayCurrency || null,
+            exchangeRateUsed: req.body.exchangeRateUsed || null
         });
 
         await newOrder.save();
@@ -161,7 +148,7 @@ export const createOrder = async (req, res) => {
             success: true,
             orderId: order.id,
             amount: order.amount,
-            currency: order.currency
+            currency: 'INR'
         });
     } catch (err) {
         console.error(JSON.stringify({ type: "payment_unhandled_error", error: err.message, stack: err.stack }));
@@ -350,28 +337,28 @@ export const webhook = async (req, res) => {
 
                     if (deliveryLock) {
                         // Increment downloads
-                    for (const item of order.items) {
-                        if (item.productId) {
-                            await Product.findByIdAndUpdate(item.productId, { $inc: { downloads: 1 } });
+                        for (const item of order.items) {
+                            if (item.productId) {
+                                await Product.findByIdAndUpdate(item.productId, { $inc: { downloads: 1 } });
+                            }
+                        }
+
+                        // Add download history
+                        if (order.userId) {
+                            const downloadRecords = order.items.map(item => ({
+                                productId: item.productId,
+                                productTitle: item.title,
+                                paymentId: payment.id,
+                                downloadedAt: new Date() // UTC via mongoose
+                            }));
+                            await User.findByIdAndUpdate(order.userId, {
+                                $push: { downloadHistory: { $each: downloadRecords } }
+                            });
                         }
                     }
-
-                    // Add download history
-                    if (order.userId) {
-                        const downloadRecords = order.items.map(item => ({
-                            productId: item.productId,
-                            productTitle: item.title,
-                            paymentId: payment.id,
-                            downloadedAt: new Date() // UTC via mongoose
-                        }));
-                        await User.findByIdAndUpdate(order.userId, {
-                            $push: { downloadHistory: { $each: downloadRecords } }
-                        });
-                    }
+                } catch (postErr) {
+                    console.error(JSON.stringify({ type: "payment_webhook_post_update_error", traceId: order.traceId, error: postErr.message }));
                 }
-            } catch (postErr) {
-                console.error(JSON.stringify({ type: "payment_webhook_post_update_error", traceId: order.traceId, error: postErr.message }));
-            }
             } else {
                 console.log(JSON.stringify({ type: "payment_webhook_skip", orderId, message: "Order already completed, event replayed, or not found." }));
             }

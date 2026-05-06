@@ -148,8 +148,8 @@ import { getDownloadHistory } from "./controllers/productController.js";
 
 app.get("/api/clients", getClients);
 app.delete("/api/clients/delete-all", deleteAllClients);
-app.get("/api/clients/:id", getClientById);
-app.delete("/api/clients/:id", deleteClient);
+app.get("/api/clients/:id([0-9a-fA-F]{24})", getClientById);
+app.delete("/api/clients/:id([0-9a-fA-F]{24})", deleteClient);
 app.get("/api/purchases", getPurchases);
 app.get("/api/downloads/history", getDownloadHistory);
 
@@ -188,14 +188,14 @@ app.put("/api/banners/reorder", async (req, res) => {
         if (!banners || !Array.isArray(banners)) {
             return res.status(400).json({ success: false, message: "Invalid banners data" });
         }
-        
+
         const bulkOps = banners.map((b, index) => ({
             updateOne: {
                 filter: { _id: b._id },
                 update: { $set: { order: b.order ?? index } }
             }
         }));
-        
+
         await Banner.bulkWrite(bulkOps);
         res.json({ success: true, message: "Order updated" });
     } catch (err) {
@@ -336,7 +336,6 @@ setInterval(() => {
             .catch(() => console.log("⚠️ Keep-alive ping failed (this is okay on startup)"));
     }
 }, 14 * 60 * 1000); // Every 14 minutes (Render sleeps after 15)
-
 // Reconciliation Cron Job
 import { reconcilePendingPayments } from './jobs/reconciliation.js';
 setInterval(() => {
@@ -366,14 +365,14 @@ app.use((err, req, res, next) => {
         logger.error("Request Timeout:", { url: req.originalUrl });
         return res.status(503).json({ success: false, message: "Request timed out" });
     }
-    
-    logger.error("Unhandled error:", { 
-        message: err.message, 
+
+    logger.error("Unhandled error:", {
+        message: err.message,
         stack: err.stack,
         url: req.originalUrl,
         method: req.method
     });
-    
+
     res.status(500).json({
         success: false,
         message: process.env.NODE_ENV === 'production' ? "Internal server error" : err.message,
@@ -397,16 +396,16 @@ import redis from "./utils/redis.js";
 
 const gracefulShutdown = async (signal) => {
     logger.info(`🛰️ ${signal} received. Starting graceful shutdown...`);
-    
+
     try {
         await mongoose.connection.close();
         logger.info("📁 MongoDB connection closed.");
-        
+
         if (redis && typeof redis.quit === 'function') {
             await redis.quit();
             logger.info("⚡ Redis connection closed.");
         }
-        
+
         logger.info("👋 Shutdown complete. Goodbye!");
         process.exit(0);
     } catch (err) {
