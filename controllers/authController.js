@@ -1,4 +1,8 @@
 import User from '../models/User.js';
+import Client from '../models/Client.js';
+import CustomDesign from '../models/CustomDesign.js';
+import Download from '../models/Download.js';
+import Order from '../models/Order.js';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import redis from '../utils/redis.js';
@@ -137,6 +141,29 @@ export const deleteClient = async (req, res) => {
         await User.findByIdAndDelete(req.params.id);
         res.json({ success: true, message: 'Client deleted' });
     } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+};
+
+export const deleteAllClients = async (req, res) => {
+    try {
+        // Delete all users except admins
+        await User.deleteMany({ isAdmin: { $ne: true } });
+        
+        // Delete all client tracking records
+        await Client.deleteMany({});
+        
+        // Delete all related transactional data
+        await CustomDesign.deleteMany({});
+        await Download.deleteMany({});
+        await Order.deleteMany({});
+        
+        res.json({ 
+            success: true, 
+            message: 'All client records and related data cleared successfully (Admin accounts preserved)' 
+        });
+    } catch (err) {
+        console.error("Delete All Clients Error:", err);
         res.status(500).json({ success: false, message: err.message });
     }
 };
