@@ -152,3 +152,12 @@ export const deleteOrder = async (req, res) => {
     }
 };
 
+export const deletePurchasesAll = async (req, res) => {
+    try {
+        await Order.deleteMany({});
+        res.json({ success: true, message: 'All purchases deleted successfully' });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+};
+

@@ -143,7 +143,7 @@ app.use("/api/payment", paymentRoutes);
 
 // ─── Dashboard Specific Routes ────────────────────────
 import { getClients, deleteClient, getClientById, deleteAllClients } from "./controllers/authController.js";
-import { getPurchases } from "./controllers/orderController.js";
+import { getPurchases, deletePurchasesAll } from "./controllers/orderController.js";
 import { getDownloadHistory } from "./controllers/productController.js";
 
 app.get("/api/clients", getClients);
@@ -151,6 +151,7 @@ app.delete("/api/clients/delete-all", deleteAllClients);
 app.get("/api/clients/:id([0-9a-fA-F]{24})", getClientById);
 app.delete("/api/clients/:id([0-9a-fA-F]{24})", deleteClient);
 app.get("/api/purchases", getPurchases);
+app.delete("/api/purchases/delete-all", deletePurchasesAll);
 app.get("/api/downloads/history", getDownloadHistory);
 
 

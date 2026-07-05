@@ -64,20 +64,59 @@ router.get('/all-months-detail', async (req, res) => {
             const monthOrders = await Order.find({
                 status: 'Completed',
                 createdAt: { $gte: startDate, $lte: endDate }
+            }).populate('userId', 'name email');
+
+            const monthCustom = await CustomDesign.find({
+                createdAt: { $gte: startDate, $lte: endDate }
             });
 
-            const monthCustom = await CustomDesign.countDocuments({
+            const monthUsers = await User.find({
+                role: { $ne: 'admin' },
                 createdAt: { $gte: startDate, $lte: endDate }
             });
 
             const monthRevenue = monthOrders.reduce((sum, o) => sum + (o.totalAmount || 0), 0);
             
+            const clientList = [];
+
+            // Add registered clients
+            monthUsers.forEach(u => {
+                clientList.push({
+                    id: u._id,
+                    name: u.name || 'Anonymous User',
+                    email: u.email,
+                    type: 'Client'
+                });
+            });
+
+            // Add store purchases
+            monthOrders.forEach(o => {
+                clientList.push({
+                    id: o._id,
+                    name: o.clientInfo?.name || o.userId?.name || 'Store Customer',
+                    email: o.clientInfo?.email || o.userId?.email || 'N/A',
+                    type: 'Customer'
+                });
+            });
+
+            // Add custom design inquiries
+            monthCustom.forEach(d => {
+                clientList.push({
+                    id: d._id,
+                    name: d.fileName ? `Custom: ${d.fileName}` : 'Custom Design Inquiry',
+                    email: d.email || 'N/A',
+                    type: 'Inquiry'
+                });
+            });
+
             return {
                 month: monthName,
-                clients: await User.countDocuments({ createdAt: { $gte: startDate, $lte: endDate } }),
+                monthIndex: index + 1,
+                clients: monthUsers.length,
                 orders: monthOrders.length,
-                customOrders: monthCustom,
-                revenue: monthRevenue
+                customOrders: monthCustom.length,
+                revenue: monthRevenue,
+                clientList
             };
         }));
 
@@ -87,5 +126,54 @@ router.get('/all-months-detail', async (req, res) => {
     }
 });
 
+// Delete all stats/data for a specific month
+router.delete('/month/:year/:monthIndex', async (req, res) => {
+    try {
+        const year = parseInt(req.params.year);
+        const monthIndex = parseInt(req.params.monthIndex) - 1; // 1-based to 0-based
+
+        const startDate = new Date(year, monthIndex, 1);
+        const endDate = new Date(year, monthIndex + 1, 0, 23, 59, 59);
+
+        // Delete Orders, CustomDesigns, and Non-Admin Users created in this range
+        await Order.deleteMany({ createdAt: { $gte: startDate, $lte: endDate } });
+        await CustomDesign.deleteMany({ createdAt: { $gte: startDate, $lte: endDate } });
+        await User.deleteMany({ 
+            role: { $ne: 'admin' }, 
+            isAdmin: { $ne: true },
+            createdAt: { $gte: startDate, $lte: endDate } 
+        });
+
+        res.json({ success: true, message: `Successfully deleted all data for month ${monthIndex + 1}/${year}` });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+});
+
+// Delete individual stats activity entry
+router.delete('/entry/:type/:id', async (req, res) => {
+    try {
+        const { type, id } = req.params;
+        let deleted = null;
+
+        if (type === 'Customer') {
+            deleted = await Order.findByIdAndDelete(id);
+        } else if (type === 'Inquiry') {
+            deleted = await CustomDesign.findByIdAndDelete(id);
+        } else if (type === 'Client') {
+            deleted = await User.findByIdAndDelete(id);
+        } else {
+            return res.status(400).json({ success: false, message: 'Invalid entry type' });
+        }
+
+        if (!deleted) {
+            return res.status(404).json({ success: false, message: 'Entry not found' });
+        }
+
+        res.json({ success: true, message: 'Entry deleted successfully' });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+});
 
 export default router;
