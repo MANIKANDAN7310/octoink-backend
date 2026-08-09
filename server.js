@@ -294,8 +294,7 @@ app.post("/api/contact", async (req, res) => {
 
         if (!emailResult.success) {
             const errorMsg = emailResult.error ? emailResult.error.message : 'Unknown error';
-            console.error(`[EMAIL_ERROR] Failed to send email. Error:`, errorMsg);
-            return res.status(500).json({ success: false, message: 'Unable to send email', debug_error: errorMsg });
+            console.error(`[EMAIL_WARNING] Email notification could not be delivered, but contact was saved in DB. Error:`, errorMsg);
         }
 
         console.log(`[CONTACT_REQUEST_END] Successfully processed contact for: ${name}`);
