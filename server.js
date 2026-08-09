@@ -277,24 +277,18 @@ app.post("/api/contact", async (req, res) => {
         // Send email notification
         console.log(`[BEFORE_SEND_EMAIL] Attempting to send email for: ${email}`);
         const emailResult = await sendEmail({
-            subject: `New Contact Form Submission from ${name}`,
-            text: `You have received a new message from the contact form.\n\nName: ${name}\nEmail: ${email}\nService: ${service || 'N/A'}\nMessage: ${message}`,
-            html: `<p>You have received a new message from the contact form.</p>
-                   <ul>
-                       <li><strong>Name:</strong> ${name}</li>
-                       <li><strong>Email:</strong> ${email}</li>
-                       <li><strong>Service:</strong> ${service || 'N/A'}</li>
-                   </ul>
-                   <p><strong>Message:</strong></p>
-                   <p>${message}</p>`,
-            replyTo: email
+            name,
+            email,
+            service,
+            message
         });
         
         console.log(`[AFTER_SEND_EMAIL] Email result success: ${emailResult.success}`);
 
         if (!emailResult.success) {
             const errorMsg = emailResult.error ? emailResult.error.message : 'Unknown error';
-            console.error(`[EMAIL_WARNING] Email notification could not be delivered, but contact was saved in DB. Error:`, errorMsg);
+            console.error(`[EMAIL_ERROR] Email notification could not be delivered, but contact was saved in DB. Error:`, errorMsg);
+            return res.status(500).json({ success: false, message: 'Contact saved but unable to send email notification.', debug_error: errorMsg });
         }
 
         console.log(`[CONTACT_REQUEST_END] Successfully processed contact for: ${name}`);
