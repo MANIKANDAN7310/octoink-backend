@@ -293,8 +293,9 @@ app.post("/api/contact", async (req, res) => {
         console.log(`[AFTER_SEND_EMAIL] Email result success: ${emailResult.success}`);
 
         if (!emailResult.success) {
-            console.error(`[EMAIL_ERROR] Failed to send email. Error:`, emailResult.error ? emailResult.error.message : 'Unknown error');
-            return res.status(500).json({ success: false, message: 'Unable to send email' });
+            const errorMsg = emailResult.error ? emailResult.error.message : 'Unknown error';
+            console.error(`[EMAIL_ERROR] Failed to send email. Error:`, errorMsg);
+            return res.status(500).json({ success: false, message: 'Unable to send email', debug_error: errorMsg });
         }
 
         console.log(`[CONTACT_REQUEST_END] Successfully processed contact for: ${name}`);
