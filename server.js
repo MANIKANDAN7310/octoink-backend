@@ -272,9 +272,11 @@ app.post("/api/contact", async (req, res) => {
         const contact = new Contact(req.body);
         await contact.save();
 
-        // Send email notification
         const { name, email, service, message } = req.body;
-        await sendEmail({
+        console.log(`[CONTACT_REQUEST_START] Received contact from: ${name}`);
+        // Send email notification
+        console.log(`[BEFORE_SEND_EMAIL] Attempting to send email for: ${email}`);
+        const emailResult = await sendEmail({
             subject: `New Contact Form Submission from ${name}`,
             text: `You have received a new message from the contact form.\n\nName: ${name}\nEmail: ${email}\nService: ${service || 'N/A'}\nMessage: ${message}`,
             html: `<p>You have received a new message from the contact form.</p>
@@ -287,8 +289,16 @@ app.post("/api/contact", async (req, res) => {
                    <p>${message}</p>`,
             replyTo: email
         });
+        
+        console.log(`[AFTER_SEND_EMAIL] Email result success: ${emailResult.success}`);
 
-        res.status(201).json({ success: true, contact });
+        if (!emailResult.success) {
+            console.error(`[EMAIL_ERROR] Failed to send email. Error:`, emailResult.error ? emailResult.error.message : 'Unknown error');
+            return res.status(500).json({ success: false, message: 'Unable to send email' });
+        }
+
+        console.log(`[CONTACT_REQUEST_END] Successfully processed contact for: ${name}`);
+        res.status(201).json({ success: true, contact, message: 'Message sent successfully!' });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
