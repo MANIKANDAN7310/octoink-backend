@@ -1,36 +1,40 @@
-import { Resend } from 'resend';
+import nodemailer from "nodemailer";
 import dotenv from "dotenv";
 
 dotenv.config();
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+const transporter = nodemailer.createTransport({
+    host: "smtp.gmail.com",
+    port: 465,
+    secure: true,
+    auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
+    },
+    connectionTimeout: 5000,
+    greetingTimeout: 5000,
+    socketTimeout: 10000,
+});
 
 export const sendEmail = async (options) => {
-    // These specific domains must be verified in the Resend Dashboard for this to work
     const toAddress = 'octoinkstudios7310@gmail.com';
-    const fromAddress = 'contact@octoinkstudios.com';
+    console.log(`[CONTACT_EMAIL_START] Attempting to send email via Nodemailer to ${toAddress}`);
 
-    console.log(`[CONTACT_EMAIL_START] Attempting to send email via Resend to ${toAddress}`);
-    
     try {
-        const { data, error } = await resend.emails.send({
-            from: fromAddress,
+        const mailOptions = {
+            from: options.from || `"Octoink Studios" <${process.env.EMAIL_USER}>`,
             to: toAddress,
             subject: options.subject,
             text: options.text,
             html: options.html,
-            reply_to: options.replyTo,
-        });
+            replyTo: options.replyTo,
+        };
 
-        if (error) {
-            console.error("[CONTACT_EMAIL_ERROR] Resend API returned error:", error);
-            return { success: false, error };
-        }
-
-        console.log("[CONTACT_EMAIL_SUCCESS] Email sent successfully via Resend. ID:", data.id);
-        return { success: true, info: data };
+        const info = await transporter.sendMail(mailOptions);
+        console.log("[CONTACT_EMAIL_SUCCESS] Email sent successfully:", info.response);
+        return { success: true, info };
     } catch (error) {
-        console.error("[CONTACT_EMAIL_ERROR] Exception in sendEmail:", error);
+        console.error("[CONTACT_EMAIL_ERROR] Error sending email:", error);
         return { success: false, error };
     }
 };
