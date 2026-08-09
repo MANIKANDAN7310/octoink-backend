@@ -6,7 +6,9 @@ dotenv.config();
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 export const sendEmail = async (options) => {
-    const toAddress = options.to || 'octoinkstudios7310@gmail.com';
+    // Resend free tier only allows sending to the registered email (manikandankarthik7310@gmail.com) 
+    // unless a custom domain is verified.
+    const toAddress = options.to || process.env.EMAIL_TO || 'manikandankarthik7310@gmail.com';
     console.log(`[CONTACT_EMAIL_START] Attempting to send email via Resend to ${toAddress}`);
     
     try {
