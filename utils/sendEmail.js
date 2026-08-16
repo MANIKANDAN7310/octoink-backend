@@ -101,14 +101,14 @@ export const sendEmail = async ({
             return { success: false, error: "Missing email configuration" };
         }
 
-        const customerEmail = replyTo || email || (customDesign && customDesign.email);
+        const customerEmail = replyTo || email || (customDesign && customDesign.email) || rest.email;
 
         if (!customerEmail || !customerEmail.includes('@') || customerEmail === 'hello.octoinkstudios@gmail.com') {
             console.warn(`[SEND_EMAIL_SKIPPED] Refusing to send email without valid customer email. Given: ${customerEmail}`);
             return { success: false, error: "Missing valid customer email address." };
         }
 
-        const customPayload = customDesign || {};
+        const customPayload = customDesign || rest || {};
         const isCustom = Boolean(isCustomDesignOrder || type === 'custom-design' || customPayload.email || customPayload.category || customPayload.fileName || customPayload.requirement || customPayload.width || customPayload.height || customPayload.colors);
 
         let resolvedHtml = html;
@@ -121,15 +121,15 @@ export const sendEmail = async ({
 
             resolvedHtml = buildCustomDesignHtml({
                 email: customerEmail,
-                category: customPayload.category || customPayload.type || 'N/A',
-                fileName: customPayload.fileName || customPayload.designFileOriginalName || 'N/A',
-                width: customPayload.width || 'N/A',
-                height: customPayload.height || 'N/A',
-                colors: customPayload.colors || 'N/A',
-                requirement: customPayload.requirement || customPayload.message || '',
+                category: customPayload.category || customPayload.type || rest.category || 'N/A',
+                fileName: customPayload.fileName || customPayload.designFileOriginalName || rest.fileName || 'N/A',
+                width: customPayload.width || rest.width || 'N/A',
+                height: customPayload.height || rest.height || 'N/A',
+                colors: customPayload.colors || rest.colors || 'N/A',
+                requirement: customPayload.requirement || customPayload.message || rest.requirement || '',
                 attachmentNames
             });
-            resolvedText = `NEW CUSTOM DESIGN ORDER\nFrom: ${customerEmail}\nCategory: ${customPayload.category || 'N/A'}\nFile Name: ${customPayload.fileName || customPayload.designFileOriginalName || 'N/A'}\nSize: ${customPayload.width || 'N/A'} × ${customPayload.height || 'N/A'}\nColors: ${customPayload.colors || 'N/A'}\nRequirements: ${customPayload.requirement || customPayload.message || 'None'}`;
+            resolvedText = `NEW CUSTOM DESIGN ORDER\nFrom: ${customerEmail}\nCategory: ${customPayload.category || rest.category || 'N/A'}\nFile Name: ${customPayload.fileName || customPayload.designFileOriginalName || rest.fileName || 'N/A'}\nSize: ${customPayload.width || rest.width || 'N/A'} × ${customPayload.height || rest.height || 'N/A'}\nColors: ${customPayload.colors || rest.colors || 'N/A'}\nRequirements: ${customPayload.requirement || customPayload.message || rest.requirement || 'None'}`;
         }
 
         const defaultSubject = subject || (isCustom ? `🎨 NEW: Custom Design Order from ${customerEmail}` : `📩 New Website Enquiry from ${customerEmail}`);
