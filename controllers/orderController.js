@@ -1,6 +1,47 @@
 import Order from '../models/Order.js';
 import CustomDesign from '../models/CustomDesign.js';
 import { sendEmail } from '../utils/sendEmail.js';
+import nodemailer from 'nodemailer';
+import fs from 'fs';
+
+const fetchFileBuffer = async (fileUrl, defaultFilename = "attachment.png", mimeTypeHint = null) => {
+    try {
+        if (!fileUrl) return null;
+        console.log(`[NODEMAILER_ATTACHMENT_FETCH] Fetching file from: ${fileUrl}`);
+        
+        let contentBuffer;
+        let contentType = mimeTypeHint || "application/octet-stream";
+        
+        if (fileUrl.startsWith("http://") || fileUrl.startsWith("https://")) {
+            const response = await fetch(fileUrl);
+            if (!response.ok) {
+                console.error(`[CUSTOM_DESIGN_FETCH_ERROR] File download failed:`, { fileUrl, defaultFilename, status: response.status, statusText: response.statusText });
+                throw new Error(`Failed to fetch file: ${response.statusText}`);
+            }
+            const arrayBuffer = await response.arrayBuffer();
+            contentBuffer = Buffer.from(arrayBuffer);
+            
+            const headerContentType = response.headers.get("content-type");
+            if (headerContentType) {
+                contentType = headerContentType.split(";")[0].trim();
+            }
+        } else if (fs.existsSync(fileUrl)) {
+            contentBuffer = fs.readFileSync(fileUrl);
+        } else {
+            console.error(`[CUSTOM_DESIGN_FETCH_ERROR] File URL/path not found:`, { fileUrl, defaultFilename });
+            return null;
+        }
+
+        return {
+            filename: defaultFilename,
+            content: contentBuffer,
+            contentType: contentType
+        };
+    } catch (err) {
+        console.error(`[CUSTOM_DESIGN_FETCH_ERROR] Exception fetching attachment:`, { fileUrl, defaultFilename, error: err.message });
+        return null;
+    }
+};
 
 export const getOrders = async (req, res) => {
     try {
@@ -16,71 +57,124 @@ export const getOrders = async (req, res) => {
 };
 
 export const createCustomDesign = async (req, res) => {
+    console.log(`[CUSTOM_DESIGN_CONTROLLER_ACTIVE] production createCustomDesign reached`);
+    console.log(`[CUSTOM_DESIGN_REQUEST_RECEIVED] Custom Design form submitted from frontend`);
     try {
         const { fileName, category, width, height, colors, requirement, email } = req.body;
+        if (!email || !email.includes("@")) {
+            console.warn(`[CUSTOM_DESIGN_REJECTED] Rejected custom design submission due to missing/invalid customer email.`);
+            return res.status(400).json({ success: false, message: "Valid customer email address is required." });
+        }
+        console.log(`[CUSTOM_DESIGN_EMAIL_START] Customer: ${email}, Category: ${category || 'N/A'}, File: ${fileName || 'N/A'}`);
         
-        const customDesignUrl = req.files?.file?.[0] ? req.files.file[0].path : "";
+        const mainFileObj = req.files?.file?.[0];
+        const customDesignUrl = mainFileObj ? mainFileObj.path : "";
+        const mainFileOriginalName = mainFileObj?.originalname || fileName || "custom-design.png";
+        const mainFileMimeType = mainFileObj?.mimetype || "image/png";
+
         const refFiles = (req.files?.refFiles || []).map(f => ({
             path: f.path,
-            originalName: f.originalname
+            originalName: f.originalname,
+            mimeType: f.mimetype
         }));
 
         const newDesign = new CustomDesign({
             email,
-            fileName: fileName || (req.files?.file?.[0]?.originalname) || "N/A",
+            fileName: fileName || mainFileOriginalName || "N/A",
             category: category || "N/A",
             width: width || "N/A",
             height: height || "N/A",
             colors: colors || "N/A",
             requirement: requirement || "",
             customDesignUrl,
-            designFileOriginalName: req.files?.file?.[0]?.originalname || "",
-            refFiles,
+            designFileOriginalName: mainFileOriginalName,
+            refFiles: refFiles.map(r => ({ path: r.path, originalName: r.originalName })),
         });
 
         await newDesign.save();
 
-        // Prepare image links for email
-        let imagesText = '';
-        let imagesHtml = '';
+        console.log("[CUSTOM_DESIGN_SAVED_DB]", newDesign._id);
+
+        // Download attachments for Nodemailer
+        const attachments = [];
+        const previewImageCid = 'custom-design-preview';
 
         if (customDesignUrl) {
-            imagesText += `\n\nMain Design File: ${customDesignUrl}`;
-            imagesHtml += `<h3>Main Design File:</h3>
-                           <p><a href="${customDesignUrl}" target="_blank">Download / View Main File</a></p>
-                           <img src="${customDesignUrl}" alt="Main Design" style="max-width: 100%; max-height: 400px; height: auto;" />`;
+            const mainAtt = await fetchFileBuffer(customDesignUrl, mainFileOriginalName, mainFileMimeType);
+            if (mainAtt) {
+                attachments.push({
+                    ...mainAtt,
+                    cid: previewImageCid,
+                    contentDisposition: 'inline'
+                });
+            }
         }
 
         if (refFiles && refFiles.length > 0) {
-            imagesText += `\n\nReference Files:\n`;
-            imagesHtml += `<h3>Reference Files:</h3>`;
-            refFiles.forEach((file, index) => {
-                imagesText += `${index + 1}. ${file.path} (${file.originalName})\n`;
-                imagesHtml += `<p><a href="${file.path}" target="_blank">Download / View Reference ${index + 1} (${file.originalName})</a></p>
-                               <img src="${file.path}" alt="Reference ${index + 1}" style="max-width: 100%; max-height: 400px; height: auto; margin-bottom: 10px;" />`;
-            });
+            for (let i = 0; i < refFiles.length; i++) {
+                const rf = refFiles[i];
+                const refAtt = await fetchFileBuffer(rf.path, rf.originalName || `ref-file-${i + 1}`, rf.mimeType);
+                if (refAtt) {
+                    attachments.push({
+                        ...refAtt,
+                        contentDisposition: 'attachment'
+                    });
+                }
+            }
         }
 
-        // Send email notification for custom design
-        await sendEmail({
-            subject: `New Custom Design Order from ${email}`,
-            text: `You have received a new custom design order.\n\nEmail: ${email}\nCategory: ${category || 'N/A'}\nDimensions: ${width || 'N/A'}x${height || 'N/A'}\nColors: ${colors || 'N/A'}\nRequirement: ${requirement || 'None'}${imagesText}`,
-            html: `<p>You have received a new custom design order.</p>
-                   <ul>
-                       <li><strong>Email:</strong> ${email}</li>
-                       <li><strong>Category:</strong> ${category || 'N/A'}</li>
-                       <li><strong>Dimensions:</strong> ${width || 'N/A'}x${height || 'N/A'}</li>
-                       <li><strong>Colors:</strong> ${colors || 'N/A'}</li>
-                   </ul>
-                   <p><strong>Requirement:</strong></p>
-                   <p>${requirement || 'None'}</p>
-                   <hr />
-                   ${imagesHtml}`,
-            replyTo: email
+        const htmlBody = buildCustomDesignEmailHtml({
+            email,
+            category,
+            fileName: fileName || mainFileOriginalName,
+            width,
+            height,
+            colors,
+            requirement,
+            previewImageCid: attachments.some(att => att.cid === previewImageCid) ? previewImageCid : null,
+            attachedFiles: attachments.filter(att => att.cid !== previewImageCid).length
+                ? attachments.filter(att => att.cid !== previewImageCid).map(att => ({ filename: att.filename }))
+                : [{ filename: mainFileOriginalName }]
         });
+
+        console.log(`[CUSTOM_DESIGN_EMAIL_FUNCTION] Using direct nodemailer transport inside orderController.js (NOT sendEmail.js)`);
+        
+        // Direct Nodemailer Gmail transport for Custom Design
+        const smtpUser = process.env.EMAIL_USER || "octoinkstudios7310@gmail.com";
+        const smtpPass = process.env.EMAIL_PASS || "kqycxjtlcpdylvfq";
+        const displaySender = "octoinkstudios7310@gmail.com";
+        const recipientEmail = process.env.NOTIFICATION_EMAIL || "hello.octoinkstudios@gmail.com";
+
+        const transporter = nodemailer.createTransport({
+            service: 'gmail',
+            auth: {
+                user: smtpUser,
+                pass: smtpPass
+            }
+        });
+
+        const subjectLine = `🎨 NEW: ${category || "Custom"} Design from ${email}`;
+        console.log(`[CUSTOM_DESIGN_SUBJECT] ${subjectLine}`);
+        console.log(`[CUSTOM_DESIGN_RECIPIENT] To: ${recipientEmail}`);
+        console.log(`[CUSTOM_DESIGN_ATTACHMENT_COUNT] Attachments: ${attachments.length}`);
+
+        const mailOptions = {
+            from: `"Octoink Studios" <${displaySender}>`,
+            to: recipientEmail,
+            replyTo: email,
+            subject: subjectLine,
+            html: htmlBody,
+            text: `NEW CUSTOM DESIGN ORDER\nFrom: ${email}\nCategory: ${category || "N/A"}\nFile Name: ${fileName || mainFileOriginalName || "N/A"}\nSize: ${width || "N/A"} × ${height || "N/A"}\nColors: ${colors || "N/A"}\nRequirements: ${requirement || "None"}\n\nAttachments: ${attachments.length}`,
+            attachments
+        };
+
+        const info = await transporter.sendMail(mailOptions);
+        console.log(`[CUSTOM_DESIGN_EMAIL_SENT] Success! MessageId: ${info.messageId}`);
+        console.log(`[CUSTOM_DESIGN_EMAIL_SUCCESS] Custom Design email sent via Nodemailer to ${recipientEmail}. MessageId: ${info.messageId}`);
 
         res.status(201).json({ success: true, customDesignId: newDesign._id });
     } catch (err) {
+        console.error(`[NODEMAILER_CUSTOM_DESIGN_ERROR] Exception in createCustomDesign:`, err);
         res.status(500).json({ success: false, message: err.message });
     }
 };
@@ -111,10 +205,9 @@ export const getPurchases = async (req, res) => {
             .populate('items.productId')
             .sort({ createdAt: -1 });
 
-        // Map to format expected by dashboard
         const mappedPurchases = orders.map(order => ({
             _id: order._id,
-            id: order._id, // Dashboard uses p.id in some places
+            id: order._id,
             productName: order.items[0]?.title || "Digital Product",
             clientName: order.clientInfo?.name || order.userId?.name || "Unknown",
             clientEmail: order.clientInfo?.email || order.userId?.email || "N/A",
@@ -130,14 +223,10 @@ export const getPurchases = async (req, res) => {
     }
 };
 
-
 export const deleteOrder = async (req, res) => {
     try {
         const id = req.params.id;
-        // Try deleting from CustomDesign first
         let deleted = await CustomDesign.findByIdAndDelete(id);
-        
-        // If not found in CustomDesign, try Order
         if (!deleted) {
             deleted = await Order.findByIdAndDelete(id);
         }
@@ -154,10 +243,99 @@ export const deleteOrder = async (req, res) => {
 
 export const deletePurchasesAll = async (req, res) => {
     try {
-        await Order.deleteMany({});
-        res.json({ success: true, message: 'All purchases deleted successfully' });
+        const result = await Order.deleteMany({});
+        res.json({
+            success: true,
+            message: 'All purchases deleted successfully',
+            deletedCount: result.deletedCount || 0
+        });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
 };
 
+const escapeHtml = (value) => String(value ?? '').replace(/[&<>"'`]/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+    '`': '&#96;'
+}[char]));
+
+const buildCustomDesignEmailHtml = ({
+    email,
+    category,
+    fileName,
+    width,
+    height,
+    colors,
+    requirement,
+    previewImageCid,
+    attachedFiles
+}) => {
+    const rows = [
+        { label: 'From', value: email },
+        { label: 'Category', value: category || 'N/A' },
+        { label: 'File Name', value: fileName || 'N/A' },
+        { label: 'Size', value: `${width || 'N/A'} × ${height || 'N/A'}` },
+        { label: 'Colors', value: colors || 'N/A' }
+    ];
+
+    const requirementMarkup = requirement
+        ? `<div style="margin-top: 18px; padding: 18px 16px; background: #f3e8ff; border-left: 4px solid #8b5cf6; border-radius: 8px;">
+            <p style="margin: 0 0 8px; font-weight: 700; color: #7c3aed; font-size: 15px;">Requirements:</p>
+            <p style="margin: 0; color: #374151; line-height: 1.6; font-size: 14px;">${escapeHtml(requirement).replace(/\n/g, '<br/>')}</p>
+          </div>`
+        : '';
+
+    const attachmentMarkup = attachedFiles && attachedFiles.length
+        ? `<div style="margin-top: 20px; padding: 16px 18px; background: #dcfce7; border: 1px solid #86efac; border-radius: 8px; color: #166534; font-size: 14px;">
+            <div style="display: inline-flex; align-items: center; gap: 8px; font-weight: 700; margin-bottom: 8px;">
+              <span>📎</span>
+              <span>${attachedFiles.length} file(s) attached</span>
+            </div>
+            ${attachedFiles.map(file => `<div style="margin-top: 4px; color: #166534; font-size: 13px;">• ${escapeHtml(file.filename || file.originalname || 'attachment')}</div>`).join('')}
+          </div>`
+        : '';
+
+    const previewMarkup = previewImageCid
+        ? `<div style="padding: 0 24px 18px;">
+            <div style="display: flex; justify-content: center; align-items: center; width: 100%; min-height: 180px; border-radius: 14px; overflow: hidden; background: #f8fafc; border: 1px solid #e5e7eb;">
+              <img src="cid:${previewImageCid}" alt="Custom design preview" style="display:block; max-width: 100%; max-height: 240px; object-fit: contain;" />
+            </div>
+          </div>`
+        : '';
+
+    return `<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  </head>
+  <body style="margin: 0; font-family: Arial, sans-serif; background: #f2f4f7; padding: 24px; color: #111827;">
+    <div style="max-width: 620px; margin: 0 auto; background: #ffffff; border-radius: 14px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.08);">
+      <div style="background: linear-gradient(135deg, #7c3aed, #5b21b6); padding: 26px 30px; text-align: center;">
+        <h1 style="margin: 0; color: #ffffff; font-size: 30px; line-height: 1.2; font-weight: 700;">New Custom Design Order</h1>
+        <p style="margin: 8px 0 0; color: rgba(255,255,255,0.92); font-size: 16px;">Octoink Studios</p>
+      </div>
+
+      ${previewMarkup}
+
+      <div style="padding: 0 20px 20px;">
+        <div style="background: #f8f5ff; border: 1px solid #e9d5ff; border-radius: 10px; overflow: hidden;">
+          ${rows.map((row, index) => `
+            <div style="display: table; width: 100%; border-bottom: ${index === rows.length - 1 ? 'none' : '1px solid #e9d5ff'}; background: ${index % 2 === 0 ? '#ffffff' : '#f8f5ff'};">
+              <div style="display: table-cell; width: 30%; padding: 16px 18px; font-weight: 700; color: #4b5563; text-align: left; font-size: 14px;">${escapeHtml(row.label)}</div>
+              <div style="display: table-cell; padding: 16px 18px; color: #111827; text-align: left; font-size: 14px;">${escapeHtml(row.value)}</div>
+            </div>
+          `).join('')}
+        </div>
+
+        ${requirementMarkup}
+        ${attachmentMarkup}
+      </div>
+    </div>
+  </body>
+</html>`;
+};

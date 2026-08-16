@@ -269,18 +269,62 @@ app.get("/api/contact", async (req, res) => {
 
 app.post("/api/contact", async (req, res) => {
     try {
+        const { name, email, service, message } = req.body;
+
+        if (!email || !email.includes("@")) {
+            console.warn(`[CONTACT_REJECTED] Rejected contact request due to missing/invalid email.`);
+            return res.status(400).json({ success: false, message: "Valid email address is required." });
+        }
+
         const contact = new Contact(req.body);
         await contact.save();
 
-        const { name, email, service, message } = req.body;
-        console.log(`[CONTACT_REQUEST_START] Received contact from: ${name}`);
+        console.log(`[CONTACT_REQUEST_START] Received contact from: ${name} (${email})`);
         // Send email notification
         console.log(`[BEFORE_SEND_EMAIL] Attempting to send email for: ${email}`);
+        const contactHtml = `
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"></head>
+<body style="font-family: Arial, sans-serif; background: #f4f4f4; padding: 20px;">
+  <div style="max-width: 600px; margin: 0 auto; background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+    <div style="background: linear-gradient(135deg, #7c3aed, #4f46e5); padding: 30px; text-align: center;">
+      <h1 style="color: white; margin: 0; font-size: 24px;">New Website Enquiry</h1>
+      <p style="color: rgba(255,255,255,0.8); margin: 8px 0 0;">Octoink Studios</p>
+    </div>
+    <div style="padding: 30px;">
+      <table style="width: 100%; border-collapse: collapse;">
+        <tr>
+          <td style="padding: 12px 16px; font-weight: bold; color: #7c3aed; width: 40%; border-bottom: 1px solid #ede9fe;">Name</td>
+          <td style="padding: 12px 16px; border-bottom: 1px solid #ede9fe;">${name || 'N/A'}</td>
+        </tr>
+        <tr style="background: #f8f5ff;">
+          <td style="padding: 12px 16px; font-weight: bold; color: #7c3aed; border-bottom: 1px solid #ede9fe;">Email</td>
+          <td style="padding: 12px 16px; border-bottom: 1px solid #ede9fe;">${email}</td>
+        </tr>
+        <tr>
+          <td style="padding: 12px 16px; font-weight: bold; color: #7c3aed; border-bottom: 1px solid #ede9fe;">Service Interested In</td>
+          <td style="padding: 12px 16px; border-bottom: 1px solid #ede9fe;">${service || "N/A"}</td>
+        </tr>
+      </table>
+      ${message ? `<div style="margin-top: 24px; padding: 16px; background: #f8f5ff; border-left: 4px solid #7c3aed; border-radius: 4px;"><p style="font-weight: bold; color: #7c3aed; margin: 0 0 8px;">Message:</p><p style="margin: 0; color: #333; line-height: 1.6;">${message.replace(/\n/g, '<br/>')}</p></div>` : ""}
+    </div>
+    <div style="background: #f8f5ff; padding: 16px; text-align: center;">
+      <p style="margin: 0; color: #888; font-size: 12px;">This is an automated notification from Octoink Studios</p>
+    </div>
+  </div>
+</body>
+</html>`;
+
         const emailResult = await sendEmail({
             name,
             email,
             service,
-            message
+            message,
+            replyTo: email,
+            subject: `📩 New Contact Enquiry from ${name || email}`,
+            text: `Name: ${name || 'N/A'}\nEmail: ${email}\nService: ${service || 'N/A'}\nMessage: ${message || 'N/A'}`,
+            html: contactHtml
         });
         
         console.log(`[AFTER_SEND_EMAIL] Email result success: ${emailResult.success}`);
@@ -310,6 +354,10 @@ app.delete("/api/contact/:id", async (req, res) => {
 // ═══════════════════════════════════════════════════════
 //  Health Check & Keep-Alive
 // ═══════════════════════════════════════════════════════
+app.get("/api/version", (req, res) => {
+    res.json({ version: "v2-purple-template", commit: "ca305da" });
+});
+
 app.get("/", (req, res) => {
     res.json({
         status: "running",
