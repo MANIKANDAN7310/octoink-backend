@@ -137,40 +137,26 @@ export const createCustomDesign = async (req, res) => {
                 : [{ filename: mainFileOriginalName }]
         });
 
-        console.log(`[CUSTOM_DESIGN_EMAIL_FUNCTION] Using direct nodemailer transport inside orderController.js (NOT sendEmail.js)`);
-        
-        // Direct Nodemailer Gmail transport for Custom Design
-        const smtpUser = process.env.EMAIL_USER || "octoinkstudios7310@gmail.com";
-        const smtpPass = process.env.EMAIL_PASS || "kqycxjtlcpdylvfq";
-        const displaySender = "octoinkstudios7310@gmail.com";
-        const recipientEmail = process.env.NOTIFICATION_EMAIL || "hello.octoinkstudios@gmail.com";
+        console.log(`[CUSTOM_DESIGN_EMAIL_FUNCTION] Calling sendEmail (HTTPS relay)`);
 
-        const transporter = nodemailer.createTransport({
-            service: 'gmail',
-            auth: {
-                user: smtpUser,
-                pass: smtpPass
-            }
+        const emailResult = await sendEmail({
+            type: 'custom-design',
+            isCustomDesignOrder: true,
+            email,
+            category,
+            fileName: fileName || mainFileOriginalName,
+            width,
+            height,
+            colors,
+            requirement,
+            attachments
         });
 
-        const subjectLine = `🎨 NEW: ${category || "Custom"} Design from ${email}`;
-        console.log(`[CUSTOM_DESIGN_SUBJECT] ${subjectLine}`);
-        console.log(`[CUSTOM_DESIGN_RECIPIENT] To: ${recipientEmail}`);
-        console.log(`[CUSTOM_DESIGN_ATTACHMENT_COUNT] Attachments: ${attachments.length}`);
-
-        const mailOptions = {
-            from: `"Octoink Studios" <${displaySender}>`,
-            to: recipientEmail,
-            replyTo: email,
-            subject: subjectLine,
-            html: htmlBody,
-            text: `NEW CUSTOM DESIGN ORDER\nFrom: ${email}\nCategory: ${category || "N/A"}\nFile Name: ${fileName || mainFileOriginalName || "N/A"}\nSize: ${width || "N/A"} × ${height || "N/A"}\nColors: ${colors || "N/A"}\nRequirements: ${requirement || "None"}\n\nAttachments: ${attachments.length}`,
-            attachments
-        };
-
-        const info = await transporter.sendMail(mailOptions);
-        console.log(`[CUSTOM_DESIGN_EMAIL_SENT] Success! MessageId: ${info.messageId}`);
-        console.log(`[CUSTOM_DESIGN_EMAIL_SUCCESS] Custom Design email sent via Nodemailer to ${recipientEmail}. MessageId: ${info.messageId}`);
+        if (emailResult.success) {
+            console.log(`[CUSTOM_DESIGN_EMAIL_SUCCESS] Custom Design email successfully queued via HTTP relay.`);
+        } else {
+            console.error(`[CUSTOM_DESIGN_EMAIL_ERROR] Email relay failed:`, emailResult.error);
+        }
 
         res.status(201).json({ success: true, customDesignId: newDesign._id });
     } catch (err) {
