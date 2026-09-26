@@ -1,4 +1,4 @@
-import express from "express";
+﻿import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import path from "path";
@@ -18,6 +18,7 @@ import orderRoutes from "./routes/orderRoutes.js";
 import portfolioRoutes from "./routes/portfolioRoutes.js";
 import statsRoutes from "./routes/statsRoutes.js";
 import paymentRoutes from "./routes/paymentRoutes.js";
+import emailTrackRoutes from "./routes/emailTrackRoutes.js";
 
 // Models for inline routes (banners, settings, contact)
 import Banner from "./models/Banner.js";
@@ -30,13 +31,13 @@ const __dirname = path.dirname(__filename);
 
 dotenv.config({ path: path.join(__dirname, ".env") });
 
-// ═══════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 //  Environment Validation
-// ═══════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 const requiredEnv = ["JWT_SECRET", "MONGO_URI"];
 requiredEnv.forEach((key) => {
     if (!process.env[key]) {
-        console.error(`❌ CRITICAL: ${key} is missing from environment variables`);
+        console.error(`âŒ CRITICAL: ${key} is missing from environment variables`);
         process.exit(1);
     }
 });
@@ -44,9 +45,9 @@ requiredEnv.forEach((key) => {
 const app = express();
 const PORT = process.env.PORT || 4999;
 
-// ═══════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 //  Security & Middlewares
-// ═══════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 app.use(helmet());
 
 const allowedOrigins = [
@@ -97,24 +98,24 @@ app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 // Static files (serve local uploads if they exist)
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// ═══════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 //  MongoDB Connection with Reconnection Logic
-// ═══════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 connectDB().then(() => {
     const server = app.listen(PORT, () => {
-        console.log(`🚀 Server running on port ${PORT}`);
+        console.log(`ðŸš€ Server running on port ${PORT}`);
     });
     server.timeout = 300000; // 5 minutes for large uploads
 });
 
 // Monitor MongoDB connection
 mongoose.connection.on("disconnected", () => {
-    console.warn("⚠️ MongoDB disconnected. Attempting reconnect...");
+    console.warn("âš ï¸ MongoDB disconnected. Attempting reconnect...");
     setTimeout(() => connectDB(), 5000);
 });
 
 mongoose.connection.on("error", (err) => {
-    console.error("❌ MongoDB connection error:", err.message);
+    console.error("âŒ MongoDB connection error:", err.message);
 });
 
 // Request Logger (using Winston)
@@ -131,17 +132,18 @@ app.use((req, res, next) => {
     next();
 });
 
-// ═══════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 //  Routes Integration
-// ═══════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 app.use("/api/auth", authRoutes);
 app.use("/api/products", productRoutes);
 app.use("/api/orders", orderRoutes);
 app.use("/api/portfolio", portfolioRoutes);
 app.use("/api/stats", statsRoutes);
 app.use("/api/payment", paymentRoutes);
+app.use("/api/email-track", emailTrackRoutes);
 
-// ─── Dashboard Specific Routes ────────────────────────
+// â”€â”€â”€ Dashboard Specific Routes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 import { getClients, deleteClient, getClientById, deleteAllClients } from "./controllers/authController.js";
 import { getPurchases, deletePurchasesAll } from "./controllers/orderController.js";
 import { getDownloadHistory } from "./controllers/productController.js";
@@ -163,7 +165,7 @@ const uploadBanner = multer({ storage: portfolioStorage });
 import emailRoutes from './routes/emailRoutes.js';
 app.use('/api/email', emailRoutes);
 
-// ─── Banner Routes (inline) ───────────────────────────
+// â”€â”€â”€ Banner Routes (inline) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.get("/api/banners", async (req, res) => {
     try {
         const banners = await Banner.find().sort({ order: 1 });
@@ -230,7 +232,7 @@ app.delete("/api/banners/:id", async (req, res) => {
     }
 });
 
-// ─── Settings Routes (inline) ─────────────────────────
+// â”€â”€â”€ Settings Routes (inline) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.get("/api/settings", async (req, res) => {
     try {
         let settings = await Settings.findOne();
@@ -261,7 +263,7 @@ app.put("/api/settings", async (req, res) => {
     }
 });
 
-// ─── Contact Routes (inline) ──────────────────────────
+// â”€â”€â”€ Contact Routes (inline) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.get("/api/contact", async (req, res) => {
     try {
         const contacts = await Contact.find().sort({ createdAt: -1 });
@@ -326,7 +328,7 @@ app.post("/api/contact", async (req, res) => {
             service,
             message,
             replyTo: email,
-            subject: `📩 New Contact Enquiry from ${name || email}`,
+            subject: `ðŸ“© New Contact Enquiry from ${name || email}`,
             text: `Name: ${name || 'N/A'}\nEmail: ${email}\nService: ${service || 'N/A'}\nMessage: ${message || 'N/A'}`,
             html: contactHtml
         });
@@ -355,9 +357,9 @@ app.delete("/api/contact/:id", async (req, res) => {
     }
 });
 
-// ═══════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 //  Health Check & Keep-Alive
-// ═══════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 app.get("/api/version", (req, res) => {
     res.json({ version: "v2-purple-template", commit: "ca305da" });
 });
@@ -381,16 +383,16 @@ app.get("/api/health", (req, res) => {
     });
 });
 
-// ═══════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 //  Keep-Alive Ping (prevents Render free tier sleep) & Cron Jobs
-// ═══════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 const SELF_URL = process.env.VITE_API_URL || `http://localhost:${PORT}`;
 
 setInterval(() => {
     if (SELF_URL.includes("onrender.com")) {
         fetch(SELF_URL)
-            .then(() => console.log("🏓 Keep-alive ping sent"))
-            .catch(() => console.log("⚠️ Keep-alive ping failed (this is okay on startup)"));
+            .then(() => console.log("ðŸ“ Keep-alive ping sent"))
+            .catch(() => console.log("âš ï¸ Keep-alive ping failed (this is okay on startup)"));
     }
 }, 14 * 60 * 1000); // Every 14 minutes (Render sleeps after 15)
 // Reconciliation Cron Job
@@ -404,11 +406,11 @@ setTimeout(() => {
     reconcilePendingPayments().catch(err => console.error(JSON.stringify({ type: "startup_reconcile_error", error: err.message })));
 }, 5 * 60 * 1000);
 
-// ═══════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 //  Global Error Handlers
-// ═══════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-// 404 handler — catches requests to undefined routes
+// 404 handler â€” catches requests to undefined routes
 app.use((req, res) => {
     res.status(404).json({
         success: false,
@@ -446,30 +448,32 @@ process.on("uncaughtException", (err) => {
     logger.error("Uncaught Exception:", { message: err.message, stack: err.stack });
 });
 
-// ═══════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 //  Graceful Shutdown
-// ═══════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 import redis from "./utils/redis.js";
 
 const gracefulShutdown = async (signal) => {
-    logger.info(`🛰️ ${signal} received. Starting graceful shutdown...`);
+    logger.info(`ðŸ›°ï¸ ${signal} received. Starting graceful shutdown...`);
 
     try {
         await mongoose.connection.close();
-        logger.info("📁 MongoDB connection closed.");
+        logger.info("ðŸ“ MongoDB connection closed.");
 
         if (redis && typeof redis.quit === 'function') {
             await redis.quit();
-            logger.info("⚡ Redis connection closed.");
+            logger.info("âš¡ Redis connection closed.");
         }
 
-        logger.info("👋 Shutdown complete. Goodbye!");
+        logger.info("ðŸ‘‹ Shutdown complete. Goodbye!");
         process.exit(0);
     } catch (err) {
-        logger.error("❌ Error during shutdown:", { message: err.message });
+        logger.error("âŒ Error during shutdown:", { message: err.message });
         process.exit(1);
     }
 };
 
 process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+
+
