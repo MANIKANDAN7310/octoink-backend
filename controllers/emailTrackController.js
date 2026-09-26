@@ -14,20 +14,21 @@ const activeSendQueues = new Map();
 const activeFollowUpQueues = new Map();
 
 // Helper: Get Nodemailer Transporter
-const getTransporter = () => {
+const getTransporter = (portOverride = null) => {
   const user = process.env.EMAIL_USER || process.env.SMTP_USER || "hello.octoinkstudios@gmail.com";
   const pass = process.env.EMAIL_PASS || process.env.SMTP_PASS || "";
   const host = process.env.SMTP_HOST || "smtp.gmail.com";
-  const port = parseInt(process.env.SMTP_PORT) || 587;
+  const port = portOverride || parseInt(process.env.SMTP_PORT) || 465;
+  const secure = port === 465;
 
   return nodemailer.createTransport({
     host,
     port,
-    secure: port === 465,
+    secure,
     auth: { user, pass },
-    connectionTimeout: 10000,
-    greetingTimeout: 10000,
-    socketTimeout: 10000,
+    connectionTimeout: 8000,
+    greetingTimeout: 8000,
+    socketTimeout: 8000,
   });
 };
 
@@ -49,42 +50,53 @@ export const checkConnection = async (req, res) => {
     });
   }
 
-  try {
-    const transporter = getTransporter();
-    await Promise.race([
-      new Promise((resolve, reject) => {
-        transporter.verify((error, success) => {
-          if (error) reject(error);
-          else resolve(success);
-        });
-      }),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("SMTP connection attempt timed out (10s)")), 10000)
-      )
-    ]);
+  // Attempt verification using Port 465 (SSL) first, fallback to Port 587 if needed
+  const portsToTry = [465, 587];
+  let lastError = null;
 
-    console.log(`✅ Gmail SMTP connection verified for ${user}`);
-    return res.json({
-      success: true,
-      connected: true,
-      status: "connected",
-      email: user,
-      senderEmail: user,
-      message: "Connected to Gmail SMTP",
-    });
-  } catch (err) {
-    console.error(`❌ Gmail SMTP verification failed for ${user}:`, err.message);
-    const safeError = err.message ? err.message.replace(/pass=[^\s]+/gi, "pass=***") : "Failed to authenticate Gmail SMTP";
-    return res.json({
-      success: true,
-      connected: false,
-      status: "disconnected",
-      email: user,
-      senderEmail: user,
-      error: safeError,
-      message: safeError,
-    });
+  for (const port of portsToTry) {
+    try {
+      const transporter = getTransporter(port);
+      await Promise.race([
+        new Promise((resolve, reject) => {
+          transporter.verify((error, success) => {
+            if (error) reject(error);
+            else resolve(success);
+          });
+        }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error(`SMTP port ${port} connection timed out (8s)`)), 8000)
+        )
+      ]);
+
+      console.log(`✅ Gmail SMTP connection verified on port ${port} for ${user}`);
+      return res.json({
+        success: true,
+        connected: true,
+        status: "connected",
+        email: user,
+        senderEmail: user,
+        message: `Connected to Gmail SMTP (port ${port})`,
+      });
+    } catch (err) {
+      console.warn(`⚠️ Port ${port} verification failed for ${user}:`, err.message);
+      lastError = err;
+    }
   }
+
+  const safeError = lastError && lastError.message
+    ? lastError.message.replace(/pass=[^\s]+/gi, "pass=***")
+    : "Failed to authenticate Gmail SMTP";
+
+  return res.json({
+    success: true,
+    connected: false,
+    status: "disconnected",
+    email: user,
+    senderEmail: user,
+    error: safeError,
+    message: safeError,
+  });
 };
 
 // 2. Parse Excel/CSV Client File
