@@ -15,8 +15,10 @@ const activeFollowUpQueues = new Map();
 
 // Helper: Get Nodemailer Transporter
 const getTransporter = (portOverride = null) => {
-  const user = process.env.EMAIL_USER || process.env.SMTP_USER || "hello.octoinkstudios@gmail.com";
-  const pass = process.env.EMAIL_PASS || process.env.SMTP_PASS || "oyfekwhejzjozsgc";
+  const user = "hello.octoinkstudios@gmail.com";
+  const pass = (process.env.EMAIL_USER === "hello.octoinkstudios@gmail.com" && process.env.EMAIL_PASS)
+    ? process.env.EMAIL_PASS
+    : "oyfekwhejzjozsgc";
   const host = process.env.SMTP_HOST || "smtp.gmail.com";
   const port = portOverride || parseInt(process.env.SMTP_PORT) || 465;
   const secure = port === 465;
@@ -34,8 +36,10 @@ const getTransporter = (portOverride = null) => {
 
 // 1. Connection Status Check
 export const checkConnection = async (req, res) => {
-  const user = process.env.EMAIL_USER || process.env.SMTP_USER || "hello.octoinkstudios@gmail.com";
-  const pass = process.env.EMAIL_PASS || process.env.SMTP_PASS || "oyfekwhejzjozsgc";
+  const user = "hello.octoinkstudios@gmail.com";
+  const pass = (process.env.EMAIL_USER === "hello.octoinkstudios@gmail.com" && process.env.EMAIL_PASS)
+    ? process.env.EMAIL_PASS
+    : "oyfekwhejzjozsgc";
 
   if (!pass) {
     console.warn("⚠️ Gmail SMTP password missing from process.env");
