@@ -25,6 +25,9 @@ const getTransporter = () => {
     port,
     secure: port === 465,
     auth: { user, pass },
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 10000,
   });
 };
 
@@ -48,12 +51,17 @@ export const checkConnection = async (req, res) => {
 
   try {
     const transporter = getTransporter();
-    await new Promise((resolve, reject) => {
-      transporter.verify((error, success) => {
-        if (error) reject(error);
-        else resolve(success);
-      });
-    });
+    await Promise.race([
+      new Promise((resolve, reject) => {
+        transporter.verify((error, success) => {
+          if (error) reject(error);
+          else resolve(success);
+        });
+      }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("SMTP connection attempt timed out (10s)")), 10000)
+      )
+    ]);
 
     console.log(`✅ Gmail SMTP connection verified for ${user}`);
     return res.json({
