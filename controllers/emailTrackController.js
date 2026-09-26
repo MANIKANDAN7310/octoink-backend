@@ -16,9 +16,8 @@ const activeFollowUpQueues = new Map();
 // Helper: Get Nodemailer Transporter
 const getTransporter = (portOverride = null) => {
   const user = "hello.octoinkstudios@gmail.com";
-  const pass = (process.env.EMAIL_USER === "hello.octoinkstudios@gmail.com" && process.env.EMAIL_PASS)
-    ? process.env.EMAIL_PASS
-    : "oyfekwhejzjozsgc";
+  // Accept process.env.EMAIL_PASS if present, otherwise fallback to the valid App Password
+  const pass = process.env.EMAIL_PASS || process.env.SMTP_PASS || "oyfekwhejzjozsgc";
   const host = process.env.SMTP_HOST || "smtp.gmail.com";
   const port = portOverride || parseInt(process.env.SMTP_PORT) || 465;
   const secure = port === 465;
@@ -28,18 +27,16 @@ const getTransporter = (portOverride = null) => {
     port,
     secure,
     auth: { user, pass },
-    connectionTimeout: 8000,
-    greetingTimeout: 8000,
-    socketTimeout: 8000,
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 10000,
   });
 };
 
 // 1. Connection Status Check
 export const checkConnection = async (req, res) => {
   const user = "hello.octoinkstudios@gmail.com";
-  const pass = (process.env.EMAIL_USER === "hello.octoinkstudios@gmail.com" && process.env.EMAIL_PASS)
-    ? process.env.EMAIL_PASS
-    : "oyfekwhejzjozsgc";
+  const pass = process.env.EMAIL_PASS || process.env.SMTP_PASS || "oyfekwhejzjozsgc";
 
   if (!pass) {
     console.warn("⚠️ Gmail SMTP password missing from process.env");
@@ -56,7 +53,7 @@ export const checkConnection = async (req, res) => {
 
   // Attempt verification using Port 465 (SSL) first, fallback to Port 587 if needed
   const portsToTry = [465, 587];
-  let lastError = null;
+  const errors = [];
 
   for (const port of portsToTry) {
     try {
@@ -69,7 +66,7 @@ export const checkConnection = async (req, res) => {
           });
         }),
         new Promise((_, reject) =>
-          setTimeout(() => reject(new Error(`SMTP port ${port} connection timed out (8s)`)), 8000)
+          setTimeout(() => reject(new Error(`SMTP port ${port} connection timed out (10s)`)), 10000)
         )
       ]);
 
@@ -84,13 +81,12 @@ export const checkConnection = async (req, res) => {
       });
     } catch (err) {
       console.warn(`⚠️ Port ${port} verification failed for ${user}:`, err.message);
-      lastError = err;
+      errors.push(`Port ${port}: ${err.message}`);
     }
   }
 
-  const safeError = lastError && lastError.message
-    ? lastError.message.replace(/pass=[^\s]+/gi, "pass=***")
-    : "Failed to authenticate Gmail SMTP";
+  const combinedError = errors.join(" | ");
+  const safeError = combinedError ? combinedError.replace(/pass=[^\s]+/gi, "pass=***") : "Failed to authenticate Gmail SMTP";
 
   return res.json({
     success: true,
