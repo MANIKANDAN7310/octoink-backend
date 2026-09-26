@@ -159,6 +159,10 @@ import multer from "multer";
 import { portfolioStorage } from "./config/cloudinary.js";
 const uploadBanner = multer({ storage: portfolioStorage });
 
+// Email module routes
+import emailRoutes from './routes/emailRoutes.js';
+app.use('/api/email', emailRoutes);
+
 // ─── Banner Routes (inline) ───────────────────────────
 app.get("/api/banners", async (req, res) => {
     try {

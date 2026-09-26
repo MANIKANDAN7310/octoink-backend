@@ -1,4 +1,5 @@
 import dotenv from "dotenv";
+import nodemailer from 'nodemailer';
 
 dotenv.config();
 
@@ -95,11 +96,9 @@ export const sendEmail = async ({
     try {
         const url = process.env.GOOGLE_APPS_SCRIPT_URL;
         const secret = process.env.GOOGLE_APPS_SCRIPT_SECRET;
-        
-        if (!url || !secret) {
-            console.error("Missing Google Apps Script URL or Secret. Emails cannot be sent.");
-            return { success: false, error: "Missing email configuration" };
-        }
+
+        const SMTP_USER = process.env.SMTP_USER || process.env.EMAIL_USER;
+        const SMTP_PASS = process.env.SMTP_PASS || process.env.EMAIL_PASS;
 
         const customerEmail = replyTo || email || (customDesign && customDesign.email) || rest.email;
 
@@ -163,26 +162,64 @@ export const sendEmail = async ({
             attachments: gasAttachments,
             ...rest
         };
+        // Prefer direct SMTP when SMTP credentials are configured
+        if (SMTP_USER && SMTP_PASS) {
+            try {
+                const transporter = nodemailer.createTransport({
+                    host: process.env.SMTP_HOST || 'smtp.gmail.com',
+                    port: process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT, 10) : 465,
+                    secure: process.env.SMTP_SECURE ? process.env.SMTP_SECURE === 'true' : true,
+                    auth: {
+                        user: SMTP_USER,
+                        pass: SMTP_PASS
+                    }
+                });
 
-        console.log(`[EMAIL_RELAY] Dispatching email to Google Apps Script (HTTPS)...`);
-        
-        const res = await fetch(url, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(payload)
-        });
+                const mailOptions = {
+                    from: `${process.env.NOTIFICATION_NAME || 'Octoink Studios'} <${process.env.NOTIFICATION_EMAIL || SMTP_USER}>`,
+                    to: customerEmail,
+                    subject: defaultSubject,
+                    text: resolvedText,
+                    html: resolvedHtml,
+                    replyTo: customerEmail
+                };
 
-        const responseData = await res.json();
-        
-        if (responseData.success) {
-            console.log(`[EMAIL_RELAY_SUCCESS] Google Apps Script processed email successfully.`);
-            return { success: true };
-        } else {
-            console.error(`[EMAIL_RELAY_ERROR] Google Apps Script returned error:`, responseData.error);
-            return { success: false, error: responseData.error };
+                if (attachments && attachments.length) {
+                    mailOptions.attachments = attachments.map(att => ({ filename: att.filename || att.originalname, content: att.content || att.buffer || att }));
+                }
+
+                const info = await transporter.sendMail(mailOptions);
+                console.log(`[SMTP_SEND] MessageId: ${info.messageId} to ${customerEmail}`);
+                return { success: true, messageId: info.messageId };
+            } catch (err) {
+                console.error('[SMTP_SEND_ERROR]', err.message);
+                // fallback to Google Apps Script if configured
+            }
         }
+
+        if (url && secret) {
+            console.log(`[EMAIL_RELAY] Dispatching email to Google Apps Script (HTTPS)...`);
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(payload)
+            });
+
+            const responseData = await res.json();
+
+            if (responseData.success) {
+                console.log(`[EMAIL_RELAY_SUCCESS] Google Apps Script processed email successfully.`);
+                return { success: true, messageId: responseData.messageId || null };
+            } else {
+                console.error(`[EMAIL_RELAY_ERROR] Google Apps Script returned error:`, responseData.error);
+                return { success: false, error: responseData.error };
+            }
+        }
+
+        console.error("No email delivery method available (SMTP or Google Apps Script) - cannot send email.");
+        return { success: false, error: 'No email delivery method configured' };
     } catch (error) {
         console.error("[EMAIL_RELAY_CRITICAL_ERROR]", error.message);
         return { success: false, error };
