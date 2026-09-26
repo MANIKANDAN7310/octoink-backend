@@ -14,16 +14,25 @@ const activeSendQueues = new Map();
 const activeFollowUpQueues = new Map();
 
 // Helper: Get Nodemailer Transporter
-const getTransporter = (portOverride = null) => {
+const getTransporter = (mode = "service") => {
   const user = "hello.octoinkstudios@gmail.com";
-  // Accept process.env.EMAIL_PASS if present, otherwise fallback to the valid App Password
   const pass = process.env.EMAIL_PASS || process.env.SMTP_PASS || "oyfekwhejzjozsgc";
-  const host = process.env.SMTP_HOST || "smtp.gmail.com";
-  const port = portOverride || parseInt(process.env.SMTP_PORT) || 465;
+
+  if (mode === "service") {
+    return nodemailer.createTransport({
+      service: "gmail",
+      auth: { user, pass },
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 10000,
+    });
+  }
+
+  const port = mode === 587 ? 587 : 465;
   const secure = port === 465;
 
   return nodemailer.createTransport({
-    host,
+    host: process.env.SMTP_HOST || "smtp.gmail.com",
     port,
     secure,
     auth: { user, pass },
@@ -51,13 +60,13 @@ export const checkConnection = async (req, res) => {
     });
   }
 
-  // Attempt verification using Port 465 (SSL) first, fallback to Port 587 if needed
-  const portsToTry = [465, 587];
+  // Attempt verification using service: gmail first, then direct ports
+  const modesToTry = ["service", 465, 587];
   const errors = [];
 
-  for (const port of portsToTry) {
+  for (const mode of modesToTry) {
     try {
-      const transporter = getTransporter(port);
+      const transporter = getTransporter(mode);
       await Promise.race([
         new Promise((resolve, reject) => {
           transporter.verify((error, success) => {
@@ -66,22 +75,22 @@ export const checkConnection = async (req, res) => {
           });
         }),
         new Promise((_, reject) =>
-          setTimeout(() => reject(new Error(`SMTP port ${port} connection timed out (10s)`)), 10000)
+          setTimeout(() => reject(new Error(`SMTP ${mode} connection timed out (10s)`)), 10000)
         )
       ]);
 
-      console.log(`✅ Gmail SMTP connection verified on port ${port} for ${user}`);
+      console.log(`✅ Gmail SMTP connection verified using ${mode} for ${user}`);
       return res.json({
         success: true,
         connected: true,
         status: "connected",
         email: user,
         senderEmail: user,
-        message: `Connected to Gmail SMTP (port ${port})`,
+        message: `Connected to Gmail SMTP (${mode})`,
       });
     } catch (err) {
-      console.warn(`⚠️ Port ${port} verification failed for ${user}:`, err.message);
-      errors.push(`Port ${port}: ${err.message}`);
+      console.warn(`⚠️ Mode ${mode} verification failed for ${user}:`, err.message);
+      errors.push(`Mode ${mode}: ${err.message}`);
     }
   }
 
