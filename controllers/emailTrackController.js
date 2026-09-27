@@ -15,16 +15,19 @@ const activeFollowUpQueues = new Map();
 
 // Helper: Get Nodemailer Transporter
 const getTransporter = (mode = "service") => {
-  const user = "hello.octoinkstudios@gmail.com";
-  const pass = "oyfekwhejzjozsgc";
+  const user = process.env.EMAIL_USER || "hello.octoinkstudios@gmail.com";
+  const pass = process.env.EMAIL_PASS || "oyfekwhejzjozsgc";
 
   if (mode === "service") {
     return nodemailer.createTransport({
       service: "gmail",
       auth: { user, pass },
-      connectionTimeout: 5000,
-      greetingTimeout: 5000,
-      socketTimeout: 5000,
+      connectionTimeout: 30000,
+      greetingTimeout: 30000,
+      socketTimeout: 60000,
+      pool: true,
+      maxConnections: 3,
+      maxMessages: 50,
     });
   }
 
@@ -36,9 +39,9 @@ const getTransporter = (mode = "service") => {
     port,
     secure,
     auth: { user, pass },
-    connectionTimeout: 5000,
-    greetingTimeout: 5000,
-    socketTimeout: 5000,
+    connectionTimeout: 30000,
+    greetingTimeout: 30000,
+    socketTimeout: 60000,
   });
 };
 
@@ -304,7 +307,9 @@ async function processSendQueue(campaignId) {
     if (!campaign) return;
 
     const serverUrl = process.env.VITE_API_URL || "http://localhost:4999";
-    const transporter = getTransporter();
+
+    // Create a pooled transporter once for the whole campaign
+    const transporter = getTransporter("service");
 
     // Fetch all recipients that are ready to send
     const recipients = await CampaignRecipient.find({
@@ -312,6 +317,8 @@ async function processSendQueue(campaignId) {
       isValidEmail: true,
       emailSent: false,
     });
+
+    console.log(`📤 Campaign ${campaignId}: Processing ${recipients.length} recipients...`);
 
     for (const recipient of recipients) {
       // Check if queue was stopped/paused by user
@@ -355,21 +362,40 @@ async function processSendQueue(campaignId) {
       const trackingPixelHtml = `<img src="${serverUrl}/api/email-track/open?trackingId=${recipient.trackingId}" width="1" height="1" style="display:none;" alt="" />`;
       const fullHtml = `<div>${personalizedBody}</div><br/>${trackingPixelHtml}`;
 
-      // Attachments configuration
-      const mailAttachments = campaign.attachments.map((att) => ({
-        filename: att.originalname || att.filename,
-        path: att.path,
-      }));
+      // Attachments configuration (only include if file exists on disk)
+      const fs = await import("fs");
+      const mailAttachments = campaign.attachments
+        .filter((att) => att.path && fs.existsSync(att.path))
+        .map((att) => ({
+          filename: att.originalname || att.filename,
+          path: att.path,
+        }));
 
-      try {
-        await transporter.sendMail({
-          from: `"Octoink Studios" <${process.env.EMAIL_USER || "hello.octoinkstudios@gmail.com"}>`,
-          to: recipient.email,
-          subject: personalizedSubject,
-          html: fullHtml,
-          attachments: mailAttachments,
-        });
+      // Retry logic: try up to 3 times with increasing delay
+      let sendSuccess = false;
+      let lastError = null;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          await transporter.sendMail({
+            from: `"Octoink Studios" <${process.env.EMAIL_USER || "hello.octoinkstudios@gmail.com"}>`,
+            to: recipient.email,
+            subject: personalizedSubject,
+            html: fullHtml,
+            attachments: mailAttachments,
+          });
+          sendSuccess = true;
+          break;
+        } catch (attemptErr) {
+          lastError = attemptErr;
+          console.warn(`⚠️ Attempt ${attempt}/3 failed for ${recipient.email}: ${attemptErr.message}`);
+          if (attempt < 3) {
+            // Wait longer between retries (2s, 4s)
+            await new Promise((r) => setTimeout(r, attempt * 2000));
+          }
+        }
+      }
 
+      if (sendSuccess) {
         // Record successful send
         await EmailSendRecord.create({
           email: recipient.email,
@@ -384,6 +410,8 @@ async function processSendQueue(campaignId) {
         recipient.sentAt = new Date();
         recipient.lastActivityAt = new Date();
         await recipient.save();
+
+        console.log(`✅ Email sent to ${recipient.email}`);
 
         // Increment campaign emailsSent counter
         await Campaign.updateOne({ campaignId }, { $inc: { emailsSent: 1 } });
@@ -415,18 +443,21 @@ async function processSendQueue(campaignId) {
           });
         }
         await b2bClient.save();
-      } catch (sendErr) {
-        console.error(`❌ Send error for ${recipient.email}:`, sendErr.message);
+      } else {
+        console.error(`❌ All 3 attempts failed for ${recipient.email}:`, lastError?.message);
         recipient.status = "Failed";
-        recipient.errorMessage = sendErr.message;
+        recipient.errorMessage = lastError?.message || "Send failed after 3 attempts";
         await recipient.save();
 
         await Campaign.updateOne({ campaignId }, { $inc: { failedCount: 1 } });
       }
 
-      // Safe delay between sends (800ms)
-      await new Promise((res) => setTimeout(res, 800));
+      // Safe delay between sends (1.5s to stay within Gmail rate limits)
+      await new Promise((res) => setTimeout(res, 1500));
     }
+
+    // Close the pooled transporter
+    transporter.close();
 
     // Check remaining unsent count
     const remaining = await CampaignRecipient.countDocuments({
@@ -438,9 +469,10 @@ async function processSendQueue(campaignId) {
     if (remaining === 0) {
       await Campaign.updateOne({ campaignId }, { status: "Completed" });
       activeSendQueues.delete(campaignId);
+      console.log(`🎉 Campaign ${campaignId} completed successfully.`);
     }
   } catch (err) {
-    console.error("Process send queue error:", err);
+    console.error("Process send queue error:", err.message, err.stack);
   }
 }
 
