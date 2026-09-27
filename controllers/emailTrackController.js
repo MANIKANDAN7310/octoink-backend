@@ -41,6 +41,76 @@ const getTransporter = (mode = "service") => {
   });
 };
 
+// ─── Dispatch Email Helper ──────────────────────────────────────────────────
+// Automatically uses Google Apps Script HTTPS relay when configured (e.g. Render where outbound SMTP is blocked).
+// Falls back to direct Nodemailer Gmail SMTP for local development or when SMTP is open.
+async function dispatchEmail({ to, subject, html, text, attachments = [] }) {
+  const url = process.env.GOOGLE_APPS_SCRIPT_URL;
+  const secret = process.env.GOOGLE_APPS_SCRIPT_SECRET;
+
+  if (url && secret) {
+    try {
+      const gasAttachments = [];
+      for (const att of attachments) {
+        if (att.path && fs.existsSync(att.path)) {
+          const content = fs.readFileSync(att.path);
+          gasAttachments.push({
+            filename: att.originalname || att.filename || "attachment",
+            mimeType: att.mimetype || "application/octet-stream",
+            data: content.toString("base64"),
+          });
+        }
+      }
+
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          secret,
+          to,
+          recipient: to,
+          email: to,
+          name: to.split("@")[0],
+          subject,
+          html,
+          text: text || html.replace(/<[^>]+>/g, " ").trim(),
+          attachments: gasAttachments,
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (data.success) {
+        console.log(`[DISPATCH_GAS] ✅ Email dispatched to ${to} via Google Apps Script`);
+        return { success: true, messageId: data.messageId || "gas-relayed" };
+      }
+      console.warn(`[DISPATCH_GAS] ⚠️ Google Apps Script returned error for ${to}:`, data.error);
+    } catch (err) {
+      console.warn(`[DISPATCH_GAS] ⚠️ Google Apps Script request failed for ${to}:`, err.message);
+    }
+  }
+
+  // Fallback: Nodemailer SMTP
+  const transporter = getTransporter("service");
+  const mailAttachments = (attachments || [])
+    .filter((att) => att.path && fs.existsSync(att.path))
+    .map((att) => ({
+      filename: att.originalname || att.filename,
+      path: att.path,
+    }));
+
+  const info = await transporter.sendMail({
+    from: `"Octoink Studios" <${SENDER_EMAIL}>`,
+    to,
+    subject,
+    html,
+    text: text || html.replace(/<[^>]+>/g, " ").trim(),
+    attachments: mailAttachments,
+  });
+
+  console.log(`[DISPATCH_SMTP] ✅ Email sent to ${to} via Gmail SMTP: ${info.messageId}`);
+  return { success: true, messageId: info.messageId };
+}
+
 // 1. Connection Status Check
 export const checkConnection = async (req, res) => {
   return res.json({
@@ -55,44 +125,26 @@ export const checkConnection = async (req, res) => {
 
 // 1b. Test Send — diagnostic endpoint to verify actual email delivery
 export const testSend = async (req, res) => {
-  const to = req.body?.to || "manikandankarthik7310@gmail.com";
-  const url = process.env.GOOGLE_APPS_SCRIPT_URL;
-  const secret = process.env.GOOGLE_APPS_SCRIPT_SECRET;
-
-  if (!url || !secret) {
-    return res.status(500).json({ success: false, error: "Missing Google Apps Script configuration" });
-  }
-
+  const to = req.body?.to || SENDER_EMAIL;
   try {
-    const payload = {
-      secret,
+    const result = await dispatchEmail({
       to,
-      recipient: to,
-      email: to,
-      name: "Octoink Client",
-      subject: `[Test] Email Track Test Send ${Date.now()}`,
-      html: `<p>Hello! This is a test outreach email sent via Google Apps Script HTTPS relay at ${new Date().toISOString()}.</p>`,
-      text: `Hello! This is a test outreach email sent via Google Apps Script HTTPS relay at ${new Date().toISOString()}.`,
-    };
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      subject: `[Test] Email Track Diagnostic Test`,
+      html: `<p>Test email sent successfully at ${new Date().toISOString()}</p><p>Sender: ${SENDER_EMAIL}<br/>Recipient: ${to}</p>`,
     });
-
-    const data = await response.json().catch(async () => ({ text: await response.text() }));
-
     return res.json({
       success: true,
+      messageId: result.messageId,
+      senderEmail: SENDER_EMAIL,
       to,
-      gasStatus: response.status,
-      gasResponse: data,
+      message: `Email sent to ${to}`,
     });
   } catch (err) {
     return res.status(500).json({
       success: false,
       error: err.message,
+      senderEmail: SENDER_EMAIL,
+      to,
     });
   }
 };
@@ -384,15 +436,13 @@ async function processSendQueue(campaignId) {
       // Retry logic: try up to 3 times with increasing delay
       let sendSuccess = false;
       let lastError = null;
-      const transporter = getTransporter("service");
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
-          await transporter.sendMail({
-            from: `"Octoink Studios" <${SENDER_EMAIL}>`,
+          await dispatchEmail({
             to: recipient.email,
             subject: personalizedSubject,
             html: fullHtml,
-            attachments: mailAttachments,
+            attachments: campaign.attachments,
           });
           sendSuccess = true;
           break;
@@ -668,8 +718,6 @@ export const stopFollowUp = async (req, res) => {
 
 async function processFollowUpQueue(recipients, customSubject, customBody) {
   try {
-    const transporter = getTransporter();
-
     for (const recipient of recipients) {
       if (activeFollowUpQueues.get("GLOBAL_FOLLOW_UP") === false) {
         console.log("⏸️ Follow-up queue stopped by user.");
@@ -716,8 +764,7 @@ async function processFollowUpQueue(recipients, customSubject, customBody) {
         .replace(/\{email\}/gi, recipient.email);
 
       try {
-        await transporter.sendMail({
-          from: `"Octoink Studios" <${SENDER_EMAIL}>`,
+        await dispatchEmail({
           to: recipient.email,
           subject: personalizedSubject,
           html: personalizedBody,

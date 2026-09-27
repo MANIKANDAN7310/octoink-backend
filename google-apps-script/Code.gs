@@ -30,8 +30,8 @@ function doPost(e) {
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
-    // Target recipient email (GLOBAL DESTINATION)
-    const recipient = "hello.octoinkstudios@gmail.com";
+    // Target recipient email (supports dynamic recipient for campaign outreach, defaults to studio email)
+    const recipient = data.to || data.recipient || "hello.octoinkstudios@gmail.com";
     
     const isCustomDesign = (data.type === "custom-design") || data.isCustomDesignOrder || Boolean(data.customDesign) || (data.subject && data.subject.toLowerCase().includes("custom design"));
 
