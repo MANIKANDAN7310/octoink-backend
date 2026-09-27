@@ -56,39 +56,14 @@ export const checkConnection = async (req, res) => {
 // 1b. Test Send — diagnostic endpoint to verify actual email delivery
 export const testSend = async (req, res) => {
   const to = req.body?.to || SENDER_EMAIL;
-  console.log(`[TEST_SEND] Attempting to send to ${to} via Gmail SMTP...`);
-
-  const modes = ["service", 587, 465];
-  let lastError = null;
-
-  for (const mode of modes) {
-    try {
-      const transporter = getTransporter(mode);
-      const info = await transporter.sendMail({
-        from: `"Octoink Studios" <${SENDER_EMAIL}>`,
-        to,
-        subject: `[Test] Email Track SMTP Test (${mode})`,
-        html: `<p>Test email sent successfully at ${new Date().toISOString()}</p><p>Mode: ${mode}<br/>Sender: ${SENDER_EMAIL}</p>`,
-      });
-      console.log(`[TEST_SEND] ✅ Success via mode=${mode}: ${info.messageId}`);
-      return res.json({
-        success: true,
-        messageId: info.messageId,
-        mode,
-        senderEmail: SENDER_EMAIL,
-        message: `Email sent to ${to} via mode ${mode}`,
-      });
-    } catch (err) {
-      console.warn(`[TEST_SEND] ⚠️ Mode ${mode} failed: ${err.message}`);
-      lastError = err;
-    }
-  }
-
-  return res.status(500).json({
-    success: false,
-    error: lastError?.message || "All SMTP modes failed",
-    code: lastError?.code,
+  return res.json({
+    status: "ok",
     senderEmail: SENDER_EMAIL,
+    hasGasUrl: Boolean(process.env.GOOGLE_APPS_SCRIPT_URL),
+    gasUrlPrefix: process.env.GOOGLE_APPS_SCRIPT_URL ? process.env.GOOGLE_APPS_SCRIPT_URL.substring(0, 35) + "..." : null,
+    hasGasSecret: Boolean(process.env.GOOGLE_APPS_SCRIPT_SECRET),
+    envEmailUser: process.env.EMAIL_USER || null,
+    hasEmailPass: Boolean(process.env.EMAIL_PASS),
   });
 };
 
