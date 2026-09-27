@@ -1,6 +1,7 @@
 import nodemailer from "nodemailer";
 import xlsx from "xlsx";
 import crypto from "crypto";
+import fs from "fs";
 import Campaign from "../models/Campaign.js";
 import CampaignRecipient from "../models/CampaignRecipient.js";
 import EmailSendRecord from "../models/EmailSendRecord.js";
@@ -422,8 +423,7 @@ async function processSendQueue(campaignId) {
       const trackingPixelHtml = `<img src="${serverUrl}/api/email-track/open?trackingId=${recipient.trackingId}" width="1" height="1" style="display:none;" alt="" />`;
       const fullHtml = `<div>${personalizedBody}</div><br/>${trackingPixelHtml}`;
 
-      // Attachments configuration (only include if file exists on disk)
-      const fs = await import("fs");
+      // Attachments configuration (only include if file still exists on disk)
       const mailAttachments = campaign.attachments
         .filter((att) => att.path && fs.existsSync(att.path))
         .map((att) => ({
