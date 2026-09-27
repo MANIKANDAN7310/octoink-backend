@@ -55,16 +55,46 @@ export const checkConnection = async (req, res) => {
 
 // 1b. Test Send — diagnostic endpoint to verify actual email delivery
 export const testSend = async (req, res) => {
-  const to = req.body?.to || SENDER_EMAIL;
-  return res.json({
-    status: "ok",
-    senderEmail: SENDER_EMAIL,
-    hasGasUrl: Boolean(process.env.GOOGLE_APPS_SCRIPT_URL),
-    gasUrlPrefix: process.env.GOOGLE_APPS_SCRIPT_URL ? process.env.GOOGLE_APPS_SCRIPT_URL.substring(0, 35) + "..." : null,
-    hasGasSecret: Boolean(process.env.GOOGLE_APPS_SCRIPT_SECRET),
-    envEmailUser: process.env.EMAIL_USER || null,
-    hasEmailPass: Boolean(process.env.EMAIL_PASS),
-  });
+  const to = req.body?.to || "manikandankarthik7310@gmail.com";
+  const url = process.env.GOOGLE_APPS_SCRIPT_URL;
+  const secret = process.env.GOOGLE_APPS_SCRIPT_SECRET;
+
+  if (!url || !secret) {
+    return res.status(500).json({ success: false, error: "Missing Google Apps Script configuration" });
+  }
+
+  try {
+    const payload = {
+      secret,
+      to,
+      recipient: to,
+      email: to,
+      name: "Octoink Client",
+      subject: `[Test] Email Track Test Send ${Date.now()}`,
+      html: `<p>Hello! This is a test outreach email sent via Google Apps Script HTTPS relay at ${new Date().toISOString()}.</p>`,
+      text: `Hello! This is a test outreach email sent via Google Apps Script HTTPS relay at ${new Date().toISOString()}.`,
+    };
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await response.json().catch(async () => ({ text: await response.text() }));
+
+    return res.json({
+      success: true,
+      to,
+      gasStatus: response.status,
+      gasResponse: data,
+    });
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      error: err.message,
+    });
+  }
 };
 
 // 2. Parse Excel/CSV Client File
