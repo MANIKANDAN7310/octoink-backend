@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import { Resend } from "resend";
 import xlsx from "xlsx";
 import crypto from "crypto";
 import fs from "fs";
@@ -14,132 +15,152 @@ import EmailTemplate from "../models/EmailTemplate.js";
 const activeSendQueues = new Map();
 const activeFollowUpQueues = new Map();
 
-// Helper: Get Nodemailer Transporter
-const getTransporter = (mode = "service") => {
-  const user = process.env.EMAIL_USER || "hello.octoinkstudios@gmail.com";
-  const pass = process.env.EMAIL_PASS || "oyfekwhejzjozsgc";
+// ─── Email Sending Helper ──────────────────────────────────────────────────
+// Sends via Resend API (works on Render/any host, no SMTP ports needed).
+// Falls back to nodemailer SMTP for local development if RESEND_API_KEY absent.
+async function sendViaResend({ to, subject, html, attachments = [], from }) {
+  const apiKey = process.env.RESEND_API_KEY;
+  const senderEmail = process.env.EMAIL_USER || "hello.octoinkstudios@gmail.com";
+  const fromAddr = from || `Octoink Studios <${senderEmail}>`;
 
-  if (mode === "service") {
-    // NOTE: Do NOT use pool:true with Gmail service mode — it causes silent failures
-    return nodemailer.createTransport({
-      service: "gmail",
-      auth: { user, pass },
-      connectionTimeout: 30000,
-      greetingTimeout: 30000,
-      socketTimeout: 60000,
-    });
+  if (apiKey) {
+    const resend = new Resend(apiKey);
+    const payload = { from: fromAddr, to, subject, html };
+
+    // Attach files if any (Resend supports base64 attachments)
+    if (attachments && attachments.length > 0) {
+      payload.attachments = attachments
+        .filter((att) => att.path && fs.existsSync(att.path))
+        .map((att) => ({
+          filename: att.originalname || att.filename,
+          content: fs.readFileSync(att.path).toString("base64"),
+        }));
+    }
+
+    const { data, error } = await resend.emails.send(payload);
+    if (error) throw new Error(error.message || JSON.stringify(error));
+    return { messageId: data?.id || "resend-ok" };
   }
 
-  const port = mode === 587 ? 587 : 465;
-  const secure = port === 465;
-
-  return nodemailer.createTransport({
-    host: process.env.SMTP_HOST || "smtp.gmail.com",
-    port,
-    secure,
+  // Local dev fallback: nodemailer SMTP
+  const user = process.env.EMAIL_USER || "hello.octoinkstudios@gmail.com";
+  const pass = process.env.EMAIL_PASS || "oyfekwhejzjozsgc";
+  const transporter = nodemailer.createTransport({
+    service: "gmail",
     auth: { user, pass },
     connectionTimeout: 30000,
     greetingTimeout: 30000,
     socketTimeout: 60000,
   });
-};
+  const mailAttachments = (attachments || [])
+    .filter((att) => att.path && fs.existsSync(att.path))
+    .map((att) => ({ filename: att.originalname || att.filename, path: att.path }));
+  const info = await transporter.sendMail({ from: fromAddr, to, subject, html, attachments: mailAttachments });
+  return { messageId: info.messageId };
+}
 
 // 1. Connection Status Check
 export const checkConnection = async (req, res) => {
-  const user = process.env.EMAIL_USER || "hello.octoinkstudios@gmail.com";
-  const pass = process.env.EMAIL_PASS || "oyfekwhejzjozsgc";
+  const senderEmail = process.env.EMAIL_USER || "hello.octoinkstudios@gmail.com";
+  const apiKey = process.env.RESEND_API_KEY;
 
-  let smtpVerified = false;
-  let verifyError = null;
-
-  const modesToTry = ["service", 587, 465];
-  for (const mode of modesToTry) {
+  if (apiKey) {
+    // Verify Resend API key by calling their domains list endpoint
     try {
-      const transporter = getTransporter(mode);
-      await Promise.race([
-        new Promise((resolve, reject) => {
-          transporter.verify((error, success) => {
-            if (error) reject(error);
-            else resolve(success);
-          });
-        }),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error(`SMTP timeout after 10s`)), 10000)
-        )
-      ]);
-      smtpVerified = true;
-      console.log(`✅ SMTP verified via mode=${mode} user=${user}`);
-      break;
+      const r = await fetch("https://api.resend.com/domains", {
+        headers: { Authorization: `Bearer ${apiKey}` }
+      });
+      if (r.ok || r.status === 200) {
+        return res.json({
+          success: true,
+          connected: true,
+          status: "connected",
+          email: senderEmail,
+          senderEmail,
+          message: `Connected via Resend API (${senderEmail})`,
+        });
+      }
+      const body = await r.json().catch(() => ({}));
+      return res.json({
+        success: false,
+        connected: false,
+        status: "disconnected",
+        email: senderEmail,
+        senderEmail,
+        message: `Resend API key invalid: ${body.message || r.status}`,
+      });
     } catch (err) {
-      verifyError = err;
-      console.warn(`⚠️ SMTP mode=${mode} failed: ${err.message}`);
+      return res.json({
+        success: false,
+        connected: false,
+        status: "disconnected",
+        email: senderEmail,
+        senderEmail,
+        message: `Could not reach Resend API: ${err.message}`,
+      });
     }
   }
 
-  if (!smtpVerified) {
-    console.error(`❌ All SMTP modes failed. Last error: ${verifyError?.message}`);
+  // Fallback: test SMTP (local dev only)
+  const user = process.env.EMAIL_USER || "hello.octoinkstudios@gmail.com";
+  const pass = process.env.EMAIL_PASS || "oyfekwhejzjozsgc";
+  try {
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: { user, pass },
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 10000,
+    });
+    await new Promise((resolve, reject) => transporter.verify((e, s) => e ? reject(e) : resolve(s)));
+    return res.json({
+      success: true,
+      connected: true,
+      status: "connected",
+      email: user,
+      senderEmail: user,
+      message: `Connected via Gmail SMTP (${user})`,
+    });
+  } catch (err) {
     return res.json({
       success: false,
       connected: false,
       status: "disconnected",
       email: user,
       senderEmail: user,
-      message: `SMTP auth failed: ${verifyError?.message || 'Unknown error'}`,
+      message: `SMTP auth failed: ${err.message}`,
     });
   }
-
-  return res.json({
-    success: true,
-    connected: true,
-    status: "connected",
-    email: user,
-    senderEmail: user,
-    message: `Connected to Gmail SMTP (${user})`,
-  });
 };
 
 // 1b. Test Send — diagnostic endpoint to verify actual email delivery
 export const testSend = async (req, res) => {
-  const user = process.env.EMAIL_USER || "hello.octoinkstudios@gmail.com";
-  const pass = process.env.EMAIL_PASS || "oyfekwhejzjozsgc";
-  const to = req.body?.to || user;
-
-  console.log(`[TEST_SEND] Attempting to send to: ${to} | user: ${user} | pass length: ${pass.length}`);
+  const to = req.body?.to || process.env.EMAIL_USER || "hello.octoinkstudios@gmail.com";
+  const apiKey = process.env.RESEND_API_KEY;
+  const senderEmail = process.env.EMAIL_USER || "hello.octoinkstudios@gmail.com";
 
   try {
-    const transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: { user, pass },
-      connectionTimeout: 30000,
-      greetingTimeout: 30000,
-      socketTimeout: 60000,
-    });
-
-    const info = await transporter.sendMail({
-      from: `"Octoink Studios" <${user}>`,
+    const result = await sendViaResend({
       to,
+      from: `Octoink Studios <${senderEmail}>`,
       subject: "[Test] Email Track SMTP Diagnostic",
-      html: `<p>This is a diagnostic test email sent at ${new Date().toISOString()}.<br/>If you see this, SMTP is working correctly.</p>`,
+      html: `<p>Test email sent at ${new Date().toISOString()}.<br/>Sender: ${senderEmail}<br/>Via: ${apiKey ? 'Resend API' : 'SMTP'}</p>`,
     });
-
-    console.log(`[TEST_SEND] ✅ Success: ${info.messageId}`);
     return res.json({
       success: true,
-      messageId: info.messageId,
+      messageId: result.messageId,
+      via: apiKey ? "Resend API" : "SMTP",
+      senderEmail,
       message: `Test email sent to ${to}`,
-      smtpUser: user,
-      passLength: pass.length,
     });
   } catch (err) {
-    console.error(`[TEST_SEND] ❌ Error:`, err.message);
     return res.status(500).json({
       success: false,
       error: err.message,
-      code: err.code,
-      responseCode: err.responseCode,
-      smtpUser: user,
-      passLength: pass.length,
-      passHasSpaces: pass.includes(" "),
+      via: apiKey ? "Resend API" : "SMTP",
+      senderEmail,
+      hasResendKey: Boolean(apiKey),
+      resendKeyLength: apiKey?.length || 0,
     });
   }
 };
@@ -369,9 +390,6 @@ async function processSendQueue(campaignId) {
 
     const serverUrl = process.env.VITE_API_URL || "http://localhost:4999";
 
-    // Create a pooled transporter once for the whole campaign
-    const transporter = getTransporter("service");
-
     // Fetch all recipients that are ready to send
     const recipients = await CampaignRecipient.find({
       campaignId,
@@ -423,21 +441,18 @@ async function processSendQueue(campaignId) {
       const trackingPixelHtml = `<img src="${serverUrl}/api/email-track/open?trackingId=${recipient.trackingId}" width="1" height="1" style="display:none;" alt="" />`;
       const fullHtml = `<div>${personalizedBody}</div><br/>${trackingPixelHtml}`;
 
-      // Attachments configuration (only include if file still exists on disk)
-      const mailAttachments = campaign.attachments
-        .filter((att) => att.path && fs.existsSync(att.path))
-        .map((att) => ({
-          filename: att.originalname || att.filename,
-          path: att.path,
-        }));
+      // Build attachments list (files must still exist on disk)
+      const mailAttachments = campaign.attachments.filter(
+        (att) => att.path && fs.existsSync(att.path)
+      );
 
       // Retry logic: try up to 3 times with increasing delay
       let sendSuccess = false;
       let lastError = null;
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
-          await transporter.sendMail({
-            from: `"Octoink Studios" <${process.env.EMAIL_USER || "hello.octoinkstudios@gmail.com"}>`,
+          await sendViaResend({
+            from: `Octoink Studios <${process.env.EMAIL_USER || "hello.octoinkstudios@gmail.com"}>`,
             to: recipient.email,
             subject: personalizedSubject,
             html: fullHtml,
@@ -449,7 +464,6 @@ async function processSendQueue(campaignId) {
           lastError = attemptErr;
           console.warn(`⚠️ Attempt ${attempt}/3 failed for ${recipient.email}: ${attemptErr.message}`);
           if (attempt < 3) {
-            // Wait longer between retries (2s, 4s)
             await new Promise((r) => setTimeout(r, attempt * 2000));
           }
         }
@@ -516,8 +530,6 @@ async function processSendQueue(campaignId) {
       await new Promise((res) => setTimeout(res, 1500));
     }
 
-    // Close the pooled transporter
-    transporter.close();
 
     // Check remaining unsent count
     const remaining = await CampaignRecipient.countDocuments({
