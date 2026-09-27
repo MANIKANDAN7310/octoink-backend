@@ -22,6 +22,7 @@ import {
   getB2BClientById,
   updateB2BClientStatus,
   getAnalytics,
+  testSend,
 } from "../controllers/emailTrackController.js";
 
 const router = express.Router();
@@ -49,6 +50,9 @@ const uploadDisk = multer({ storage: diskStorage });
 
 // 1. Connection check
 router.get("/connection", checkConnection);
+
+// 1b. Test send diagnostic
+router.post("/test-send", testSend);
 
 // 2. Client parse
 router.post("/import-clients", uploadMemory.single("file"), parseClientFile);

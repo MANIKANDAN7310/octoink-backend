@@ -19,15 +19,13 @@ const getTransporter = (mode = "service") => {
   const pass = process.env.EMAIL_PASS || "oyfekwhejzjozsgc";
 
   if (mode === "service") {
+    // NOTE: Do NOT use pool:true with Gmail service mode — it causes silent failures
     return nodemailer.createTransport({
       service: "gmail",
       auth: { user, pass },
       connectionTimeout: 30000,
       greetingTimeout: 30000,
       socketTimeout: 60000,
-      pool: true,
-      maxConnections: 3,
-      maxMessages: 50,
     });
   }
 
@@ -47,10 +45,13 @@ const getTransporter = (mode = "service") => {
 
 // 1. Connection Status Check
 export const checkConnection = async (req, res) => {
-  const user = "hello.octoinkstudios@gmail.com";
+  const user = process.env.EMAIL_USER || "hello.octoinkstudios@gmail.com";
+  const pass = process.env.EMAIL_PASS || "oyfekwhejzjozsgc";
 
-  // Perform verification attempt in background
-  const modesToTry = ["service", 465, 587];
+  let smtpVerified = false;
+  let verifyError = null;
+
+  const modesToTry = ["service", 587, 465];
   for (const mode of modesToTry) {
     try {
       const transporter = getTransporter(mode);
@@ -62,25 +63,84 @@ export const checkConnection = async (req, res) => {
           });
         }),
         new Promise((_, reject) =>
-          setTimeout(() => reject(new Error(`SMTP ${mode} timeout`)), 2000)
+          setTimeout(() => reject(new Error(`SMTP timeout after 10s`)), 10000)
         )
       ]);
-      console.log(`✅ Gmail SMTP connection verified via ${mode} for ${user}`);
+      smtpVerified = true;
+      console.log(`✅ SMTP verified via mode=${mode} user=${user}`);
       break;
     } catch (err) {
-      console.warn(`⚠️ Mode ${mode} verification attempt:`, err.message);
+      verifyError = err;
+      console.warn(`⚠️ SMTP mode=${mode} failed: ${err.message}`);
     }
   }
 
-  console.log(`✅ Gmail SMTP verified for ${user}`);
+  if (!smtpVerified) {
+    console.error(`❌ All SMTP modes failed. Last error: ${verifyError?.message}`);
+    return res.json({
+      success: false,
+      connected: false,
+      status: "disconnected",
+      email: user,
+      senderEmail: user,
+      message: `SMTP auth failed: ${verifyError?.message || 'Unknown error'}`,
+    });
+  }
+
   return res.json({
     success: true,
     connected: true,
     status: "connected",
     email: user,
     senderEmail: user,
-    message: "Connected to Gmail SMTP (hello.octoinkstudios@gmail.com)",
+    message: `Connected to Gmail SMTP (${user})`,
   });
+};
+
+// 1b. Test Send — diagnostic endpoint to verify actual email delivery
+export const testSend = async (req, res) => {
+  const user = process.env.EMAIL_USER || "hello.octoinkstudios@gmail.com";
+  const pass = process.env.EMAIL_PASS || "oyfekwhejzjozsgc";
+  const to = req.body?.to || user;
+
+  console.log(`[TEST_SEND] Attempting to send to: ${to} | user: ${user} | pass length: ${pass.length}`);
+
+  try {
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: { user, pass },
+      connectionTimeout: 30000,
+      greetingTimeout: 30000,
+      socketTimeout: 60000,
+    });
+
+    const info = await transporter.sendMail({
+      from: `"Octoink Studios" <${user}>`,
+      to,
+      subject: "[Test] Email Track SMTP Diagnostic",
+      html: `<p>This is a diagnostic test email sent at ${new Date().toISOString()}.<br/>If you see this, SMTP is working correctly.</p>`,
+    });
+
+    console.log(`[TEST_SEND] ✅ Success: ${info.messageId}`);
+    return res.json({
+      success: true,
+      messageId: info.messageId,
+      message: `Test email sent to ${to}`,
+      smtpUser: user,
+      passLength: pass.length,
+    });
+  } catch (err) {
+    console.error(`[TEST_SEND] ❌ Error:`, err.message);
+    return res.status(500).json({
+      success: false,
+      error: err.message,
+      code: err.code,
+      responseCode: err.responseCode,
+      smtpUser: user,
+      passLength: pass.length,
+      passHasSpaces: pass.includes(" "),
+    });
+  }
 };
 
 // 2. Parse Excel/CSV Client File
