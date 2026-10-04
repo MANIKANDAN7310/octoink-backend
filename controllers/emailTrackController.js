@@ -67,10 +67,11 @@ async function dispatchEmail({ to, subject, html, text, attachments = [] }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           secret,
+          type: "campaign",
           to,
           recipient: to,
-          email: to,
-          name: to.split("@")[0],
+          replyTo: SENDER_EMAIL,
+          name: "Octoink Studios",
           subject,
           html,
           text: text || html.replace(/<[^>]+>/g, " ").trim(),

@@ -1,15 +1,33 @@
 /**
  * Google Apps Script Web App for Octoink Studios Email Relay
  * 
- * MUST BE DEPLOYED UNDER GMAIL ACCOUNT: octoinkstudios7310@gmail.com
+ * ⚠️ CRITICAL DEPLOYMENT INSTRUCTIONS:
+ * MUST BE DEPLOYED UNDER GMAIL ACCOUNT: hello.octoinkstudios@gmail.com
+ * (This ensures all outreach emails are sent directly FROM hello.octoinkstudios@gmail.com)
  * 
- * Deployment settings:
- * - Execute as: Me (octoinkstudios7310@gmail.com)
- * - Who has access: Anyone
+ * Deployment settings in script.google.com:
+ * 1. Open https://script.google.com signed in as: hello.octoinkstudios@gmail.com
+ * 2. Paste this entire code into the Code.gs editor
+ * 3. Click "Deploy" -> "Manage deployments" (or "New deployment")
+ * 4. Select type: "Web app"
+ * 5. Configuration:
+ *    - Description: "Octoink Studios Email Relay"
+ *    - Execute as: "Me (hello.octoinkstudios@gmail.com)"
+ *    - Who has access: "Anyone"
+ * 6. Click "Deploy" (or "New Version" -> "Deploy" if updating)
+ * 7. Copy the Web App URL (starts with https://script.google.com/macros/s/...)
+ * 8. Set that URL in your Render environment variable: GOOGLE_APPS_SCRIPT_URL
  */
 
 function doPost(e) {
   try {
+    if (!e || !e.postData || !e.postData.contents) {
+      return ContentService.createTextOutput(JSON.stringify({ 
+        success: false, 
+        error: "Missing POST body data" 
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
     const data = JSON.parse(e.postData.contents);
     
     // Shared secret for security validation
@@ -22,32 +40,60 @@ function doPost(e) {
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
-    // Reject empty/dummy payloads that have no customer info
-    if (!data.html && !data.customDesign && !data.email && !data.replyTo && !data.name && !data.message) {
-      return ContentService.createTextOutput(JSON.stringify({
-        success: false,
-        error: "Ignored empty/dummy request"
-      })).setMimeType(ContentService.MimeType.JSON);
-    }
+    // Determine if this is an OUTBOUND CAMPAIGN / OUTREACH EMAIL to a client
+    const isOutboundCampaign = Boolean(
+      data.type === "campaign" ||
+      data.type === "email-track" ||
+      data.type === "followup" ||
+      (data.to && 
+       data.to.toLowerCase() !== "hello.octoinkstudios@gmail.com" && 
+       !data.isCustomDesignOrder && 
+       data.type !== "custom-design" && 
+       data.type !== "contact")
+    );
 
-    // Target recipient email (supports dynamic recipient for campaign outreach, defaults to studio email)
-    const recipient = data.to || data.recipient || "hello.octoinkstudios@gmail.com";
-    
-    const isCustomDesign = (data.type === "custom-design") || data.isCustomDesignOrder || Boolean(data.customDesign) || (data.subject && data.subject.toLowerCase().includes("custom design"));
+    let recipient = "";
+    let replyToAddress = "";
+    let senderName = "Octoink Studios";
+    let subject = data.subject || "Octoink Studios";
+    let bodyText = data.text || "";
+    let bodyHtml = data.html || "";
 
-    Logger.log("customDesign received: " + isCustomDesign);
+    if (isOutboundCampaign) {
+      // ═══════════════════════════════════════════════════════════════════════════
+      // 1. OUTBOUND CAMPAIGN EMAIL (Sent TO the Client on your list)
+      // ═══════════════════════════════════════════════════════════════════════════
+      recipient = data.to || data.recipient;
+      if (!recipient || !recipient.includes("@")) {
+        return ContentService.createTextOutput(JSON.stringify({
+          success: false,
+          error: "Recipient email is missing or invalid for campaign email"
+        })).setMimeType(ContentService.MimeType.JSON);
+      }
 
-    // Customer email for Reply-To
-    const customerEmail = data.replyTo || data.email || (data.customDesign && data.customDesign.email) || "hello.octoinkstudios@gmail.com";
-    const senderName = data.name || (isCustomDesign ? "Custom Design Customer" : "Website Customer");
-    const defaultSubject = isCustomDesign ? "New Custom Design Order - Octoink Studios" : "New Website Enquiry - Octoink Studios";
-    const subject = data.subject || defaultSubject;
+      // When the client hits "Reply", replies MUST go to hello.octoinkstudios@gmail.com
+      replyToAddress = "hello.octoinkstudios@gmail.com";
+      senderName = "Octoink Studios";
 
-    let bodyText = data.text;
-    let bodyHtml = data.html;
+      if (!bodyText && bodyHtml) {
+        bodyText = bodyHtml.replace(/<[^>]+>/g, " ").trim();
+      }
 
-    if (isCustomDesign) {
-      if (!bodyHtml) {
+      Logger.log("Outbound campaign email targeted to client: " + recipient);
+    } else {
+      // ═══════════════════════════════════════════════════════════════════════════
+      // 2. INBOUND WEBSITE CONTACT OR CUSTOM DESIGN ORDER
+      // ═══════════════════════════════════════════════════════════════════════════
+      // Inbound notifications are delivered TO Octoink Studios
+      recipient = "hello.octoinkstudios@gmail.com";
+
+      const isCustomDesign = (data.type === "custom-design") || data.isCustomDesignOrder || Boolean(data.customDesign) || (data.subject && data.subject.toLowerCase().includes("custom design"));
+      const customerEmail = data.replyTo || data.email || (data.customDesign && data.customDesign.email) || "hello.octoinkstudios@gmail.com";
+      replyToAddress = customerEmail;
+      senderName = data.name || (isCustomDesign ? "Custom Design Customer" : "Website Customer");
+      subject = data.subject || (isCustomDesign ? "New Custom Design Order - Octoink Studios" : "New Website Enquiry - Octoink Studios");
+
+      if (isCustomDesign && !bodyHtml) {
         const cd = data.customDesign || data;
         const categoryStr = cd.category || data.category || "N/A";
         const fileNameStr = cd.fileName || data.fileName || "N/A";
@@ -56,7 +102,6 @@ function doPost(e) {
         const sizeStr = cd.size || (widthStr && heightStr ? widthStr + " × " + heightStr : (widthStr || heightStr || "N/A"));
         const colorsStr = cd.colors || data.colors || "N/A";
         const requirementStr = cd.requirement || cd.message || data.requirement || data.message || "None";
-        const fileUrlStr = cd.fileUrl || cd.customDesignUrl || data.customDesignUrl || "";
 
         bodyText = "NEW CUSTOM DESIGN ORDER\n\n" +
           "Customer Email: " + customerEmail + "\n" +
@@ -66,7 +111,7 @@ function doPost(e) {
           "Colors: " + colorsStr + "\n\n" +
           "Requirements:\n" + requirementStr;
 
-        bodyHtml = '<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">' +
+        bodyHtml = '<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">' +
           '<div style="background: linear-gradient(135deg, #7c3aed, #4f46e5); padding: 30px; text-align: center; color: white;">' +
           '<h1 style="margin:0; font-size: 24px;">New Custom Design Order</h1>' +
           '<p style="margin:8px 0 0; font-size:14px; opacity:0.8;">Octoink Studios</p>' +
@@ -85,16 +130,14 @@ function doPost(e) {
           '</div>' +
           '</div>' +
           '</div>';
-      }
-    } else {
-      if (!bodyHtml) {
+      } else if (!bodyHtml) {
         bodyText = "NEW WEBSITE ENQUIRY\n\n" +
           "Name: " + senderName + "\n" +
           "Email: " + customerEmail + "\n" +
           "Service: " + (data.service || "N/A") + "\n\n" +
           "Message:\n" + (data.message || "");
 
-        bodyHtml = '<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">' +
+        bodyHtml = '<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">' +
           '<div style="background: linear-gradient(135deg, #7c3aed, #4f46e5); padding: 30px; text-align: center; color: white;">' +
           '<h1 style="margin:0; font-size: 24px;">New Website Enquiry</h1>' +
           '<p style="margin:8px 0 0; font-size:14px; opacity:0.8;">Octoink Studios</p>' +
@@ -119,8 +162,8 @@ function doPost(e) {
         if (att && att.data) {
           try {
             const bytes = Utilities.base64Decode(att.data);
-            const fileName = att.filename || "design-attachment.png";
-            const mimeType = att.mimeType || "image/png";
+            const fileName = att.filename || "attachment.png";
+            const mimeType = att.mimeType || "application/octet-stream";
             const blob = Utilities.newBlob(bytes, mimeType, fileName);
             blobs.push(blob);
             fileNames.push(fileName);
@@ -131,31 +174,30 @@ function doPost(e) {
       });
     }
 
-    Logger.log("attachment count: " + blobs.length);
-    Logger.log("attachment filenames: " + fileNames.join(", "));
-
     const mailOptions = {
       htmlBody: bodyHtml,
-      replyTo: customerEmail,
-      name: "Octoink Studios"
+      replyTo: replyToAddress,
+      name: senderName
     };
 
     if (blobs.length > 0) {
       mailOptions.attachments = blobs;
     }
 
-    // Send email via GmailApp (sent FROM octoinkstudios7310@gmail.com)
+    // Send email via GmailApp
     GmailApp.sendEmail(recipient, subject, bodyText || "Please view the HTML version of this email.", mailOptions);
 
-    Logger.log("email send success for recipient: " + recipient);
+    Logger.log("Email successfully sent to: " + recipient + " with " + blobs.length + " attachment(s)");
 
     return ContentService.createTextOutput(JSON.stringify({ 
       success: true, 
-      message: "Email dispatched to " + recipient + " with " + blobs.length + " attachment(s)." 
+      message: "Email dispatched successfully to " + recipient,
+      recipient: recipient,
+      replyTo: replyToAddress
     })).setMimeType(ContentService.MimeType.JSON);
 
   } catch (err) {
-    Logger.log("email send failure: " + err.toString());
+    Logger.log("Email send error: " + err.toString());
     return ContentService.createTextOutput(JSON.stringify({ 
       success: false, 
       error: err.toString() 
