@@ -13,5 +13,5 @@ echo Setting SMTP_USER environment variable...
 echo (This matches the EMAIL_USER from .env)
 echo.
 
-set SMTP_USER=octoinkstudios7310@gmail.com
+set SMTP_USER=hello.octoinkstudios@gmail.com
 node server.js

@@ -14,138 +14,221 @@ import EmailTemplate from "../models/EmailTemplate.js";
 const activeSendQueues = new Map();
 const activeFollowUpQueues = new Map();
 
-const SENDER_EMAIL = "hello.octoinkstudios@gmail.com";
-const SENDER_PASS = "oyfekwhejzjozsgc";
-
-// ─── Nodemailer Transporter Factory ─────────────────────────────────────────
-const getTransporter = (mode = "service") => {
-  if (mode === "service") {
-    return nodemailer.createTransport({
-      service: "gmail",
-      auth: { user: SENDER_EMAIL, pass: SENDER_PASS },
-      connectionTimeout: 20000,
-      greetingTimeout: 20000,
-      socketTimeout: 30000,
-    });
-  }
-
-  const port = mode === 587 ? 587 : 465;
-  return nodemailer.createTransport({
-    host: "smtp.gmail.com",
-    port,
-    secure: port === 465,
-    auth: { user: SENDER_EMAIL, pass: SENDER_PASS },
-    connectionTimeout: 20000,
-    greetingTimeout: 20000,
-    socketTimeout: 30000,
-  });
+const getSenderCredentials = () => {
+  const user = process.env.EMAIL_FROM || process.env.EMAIL_USER || "hello.octoinkstudios@gmail.com";
+  const pass = process.env.EMAIL_PASS || process.env.SMTP_PASS || "oyfekwhejzjozsgc";
+  return { user, pass };
 };
 
+const createSmtpTransporter = () => {
+  const { user, pass } = getSenderCredentials();
+  const host = process.env.SMTP_HOST || "smtp.gmail.com";
+  const port = process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT, 10) : 465;
+  const secure = process.env.SMTP_SECURE !== undefined ? process.env.SMTP_SECURE === 'true' : (port === 465);
+
+  return {
+    transporter: nodemailer.createTransport({
+      host,
+      port,
+      secure,
+      auth: { user, pass },
+      connectionTimeout: 15000,
+      greetingTimeout: 15000,
+      socketTimeout: 20000,
+    }),
+    user
+  };
+};
+
+async function verifyTransporterConnection() {
+  const { transporter, user } = createSmtpTransporter();
+  try {
+    const verified = await transporter.verify();
+    console.log(`[SMTP_VERIFY_SUCCESS] Connection verified for authenticated account: ${user}`);
+    return { ok: true, user };
+  } catch (err) {
+    console.error(`[SMTP_VERIFY_ERROR] Connection/Auth failed for account ${user}:`, err.message);
+    return { ok: false, user, error: err.message };
+  }
+}
+
 // ─── Dispatch Email Helper ──────────────────────────────────────────────────
-// Automatically uses Google Apps Script HTTPS relay when configured (e.g. Render where outbound SMTP is blocked).
-// Falls back to direct Nodemailer Gmail SMTP for local development or when SMTP is open.
+// Sends outbound campaign/outreach emails directly via authenticated Gmail SMTP.
+// Formats standard headers (From, To, Subject, Date, Message-ID), verifies SMTP connection,
+// logs detailed delivery metrics, and validates recipient acceptance.
 async function dispatchEmail({ to, subject, html, text, attachments = [] }) {
-  const url = process.env.GOOGLE_APPS_SCRIPT_URL;
-  const secret = process.env.GOOGLE_APPS_SCRIPT_SECRET;
+  const { transporter, user: senderEmail } = createSmtpTransporter();
 
-  if (url && secret) {
-    try {
-      const gasAttachments = [];
-      for (const att of attachments) {
-        if (att.path && fs.existsSync(att.path)) {
-          const content = fs.readFileSync(att.path);
-          gasAttachments.push({
-            filename: att.originalname || att.filename || "attachment",
-            mimeType: att.mimetype || "application/octet-stream",
-            data: content.toString("base64"),
-          });
-        }
+  if (!to || !to.includes("@")) {
+    throw new Error(`Invalid recipient email address: "${to}"`);
+  }
+
+  // 1. Verify SMTP connection & authentication
+  try {
+    await transporter.verify();
+    console.log(`[SMTP_VERIFY] SMTP connection verified for sender: ${senderEmail}`);
+  } catch (verifyErr) {
+    console.error(`[SMTP_VERIFY_FAILED] Connection/Authentication failed for sender ${senderEmail}: ${verifyErr.message}`);
+    throw new Error(`SMTP connection/authentication failed: ${verifyErr.message}`);
+  }
+
+  // 2. Format attachments safely
+  const mailAttachments = [];
+  if (attachments && Array.isArray(attachments)) {
+    for (const att of attachments) {
+      if (att.path && fs.existsSync(att.path)) {
+        mailAttachments.push({
+          filename: att.originalname || att.filename || path.basename(att.path),
+          path: att.path,
+          contentType: att.mimetype || att.contentType,
+        });
+      } else if (att.content || att.buffer) {
+        mailAttachments.push({
+          filename: att.filename || att.originalname || "attachment",
+          content: att.content || att.buffer,
+          contentType: att.contentType || att.mimetype,
+        });
       }
-
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          secret,
-          type: "campaign",
-          to,
-          recipient: to,
-          replyTo: SENDER_EMAIL,
-          name: "Octoink Studios",
-          subject,
-          html,
-          text: text || html.replace(/<[^>]+>/g, " ").trim(),
-          attachments: gasAttachments,
-        }),
-      });
-
-      const data = await res.json().catch(() => ({}));
-      if (data.success) {
-        console.log(`[DISPATCH_GAS] ✅ Email dispatched to ${to} via Google Apps Script`);
-        return { success: true, messageId: data.messageId || "gas-relayed" };
-      }
-      console.warn(`[DISPATCH_GAS] ⚠️ Google Apps Script returned error for ${to}:`, data.error);
-    } catch (err) {
-      console.warn(`[DISPATCH_GAS] ⚠️ Google Apps Script request failed for ${to}:`, err.message);
     }
   }
 
-  // Fallback: Nodemailer SMTP
-  const transporter = getTransporter("service");
-  const mailAttachments = (attachments || [])
-    .filter((att) => att.path && fs.existsSync(att.path))
-    .map((att) => ({
-      filename: att.originalname || att.filename,
-      path: att.path,
-    }));
+  // 3. Handle tracking pixel URL safely
+  // If serverUrl is localhost or non-HTTPS, omit/strip local tracking img tag so Gmail security filters don't drop the email
+  const serverUrl = process.env.VITE_API_URL || process.env.SERVER_URL || "";
+  let finalHtml = html || "";
+  if (!serverUrl || !serverUrl.startsWith("https://")) {
+    finalHtml = finalHtml.replace(/<img[^>]*src=["']http:\/\/(localhost|127\.0\.0\.1)[^"']*["'][^>]*>/gi, "");
+  }
 
-  const info = await transporter.sendMail({
-    from: `"Octoink Studios" <${SENDER_EMAIL}>`,
-    to,
-    subject,
-    html,
-    text: text || html.replace(/<[^>]+>/g, " ").trim(),
-    attachments: mailAttachments,
-  });
+  const messageIdHeader = `<${crypto.randomUUID()}@octoinkstudios.com>`;
+  const cleanText = text || finalHtml.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 
-  console.log(`[DISPATCH_SMTP] ✅ Email sent to ${to} via Gmail SMTP: ${info.messageId}`);
-  return { success: true, messageId: info.messageId };
+  const mailOptions = {
+    from: `"Octoink Studios" <${senderEmail}>`,
+    to: to.trim(),
+    subject: subject || "Notification from Octoink Studios",
+    text: cleanText,
+    html: finalHtml,
+    headers: {
+      "Date": new Date().toUTCString(),
+      "Message-ID": messageIdHeader,
+      "X-Mailer": "Octoink-EmailTrack/1.0"
+    }
+  };
+
+  if (mailAttachments.length > 0) {
+    mailOptions.attachments = mailAttachments;
+  }
+
+  // Note: Reply-To is intentionally omitted per requirements so recipient receives directly from hello.octoinkstudios@gmail.com
+
+  console.log(`[DISPATCH_SMTP_ATTEMPT] Sender: ${senderEmail} | Recipient: ${to} | Subject: "${subject}"`);
+
+  const info = await transporter.sendMail(mailOptions);
+
+  const accepted = info.accepted || [];
+  const rejected = info.rejected || [];
+  const response = info.response || "";
+  const messageId = info.messageId || messageIdHeader;
+  const envelope = info.envelope || { from: senderEmail, to: [to] };
+
+  console.log(`[DISPATCH_SMTP_RESPONSE] Recipient: ${to}`);
+  console.log(` - MessageId: ${messageId}`);
+  console.log(` - Response: ${response}`);
+  console.log(` - Accepted: ${JSON.stringify(accepted)}`);
+  console.log(` - Rejected: ${JSON.stringify(rejected)}`);
+  console.log(` - Envelope: ${JSON.stringify(envelope)}`);
+
+  // 4. Validate recipient acceptance
+  const isAccepted = Array.isArray(accepted) && accepted.some(addr => addr.toLowerCase() === to.toLowerCase());
+  const isRejected = Array.isArray(rejected) && rejected.some(addr => addr.toLowerCase() === to.toLowerCase());
+
+  if (isRejected || (!isAccepted && accepted.length === 0)) {
+    const errorMsg = `SMTP server rejected delivery for recipient ${to}. Accepted: ${JSON.stringify(accepted)}, Rejected: ${JSON.stringify(rejected)}`;
+    console.error(`[DISPATCH_REJECTED] ${errorMsg}`);
+    throw new Error(errorMsg);
+  }
+
+  return {
+    success: true,
+    messageId,
+    smtpResponse: response,
+    accepted,
+    rejected,
+    envelope,
+    sender: senderEmail,
+    recipient: to
+  };
 }
 
 // 1. Connection Status Check
 export const checkConnection = async (req, res) => {
-  return res.json({
-    success: true,
-    connected: true,
-    status: "connected",
-    email: SENDER_EMAIL,
-    senderEmail: SENDER_EMAIL,
-    message: `Connected to Gmail SMTP (${SENDER_EMAIL})`,
-  });
+  const { ok, user, error } = await verifyTransporterConnection();
+  if (ok) {
+    return res.json({
+      success: true,
+      connected: true,
+      status: "connected",
+      email: user,
+      senderEmail: user,
+      message: `Connected & verified Gmail SMTP (${user})`,
+    });
+  } else {
+    return res.status(500).json({
+      success: false,
+      connected: false,
+      status: "disconnected",
+      email: user,
+      senderEmail: user,
+      error: error || "SMTP authentication failed",
+      message: `Failed to authenticate Gmail SMTP (${user}): ${error}`,
+    });
+  }
 };
 
 // 1b. Test Send — diagnostic endpoint to verify actual email delivery
 export const testSend = async (req, res) => {
-  const to = req.body?.to || SENDER_EMAIL;
+  const to = req.body?.to || req.query?.to || "manikandaninkwrk@gmail.com";
+  const { user: senderEmail } = getSenderCredentials();
+
+  console.log(`[TEST_SEND_DIAGNOSTIC] Initiating test send from ${senderEmail} to ${to}`);
+
   try {
     const result = await dispatchEmail({
       to,
-      subject: `[Test] Email Track Diagnostic Test`,
-      html: `<p>Test email sent successfully at ${new Date().toISOString()}</p><p>Sender: ${SENDER_EMAIL}<br/>Recipient: ${to}</p>`,
+      subject: `[Diagnostic Test] Email Track Delivery Verification`,
+      html: `
+        <div style="font-family: Arial, sans-serif; padding: 24px; color: #111827; background-color: #f9fafb; border-radius: 8px;">
+          <h2 style="color: #7c3aed; margin-top: 0;">Octoink Studios - Diagnostic Email Delivery Test</h2>
+          <p>This test email verifies that Gmail SMTP delivery is operating properly.</p>
+          <hr style="border: 0; border-top: 1px solid #e5e7eb; margin: 16px 0;"/>
+          <p><b>From (Sender):</b> ${senderEmail}</p>
+          <p><b>To (Recipient):</b> ${to}</p>
+          <p><b>Timestamp:</b> ${new Date().toISOString()}</p>
+        </div>
+      `,
+      text: `Octoink Studios Diagnostic Email Test\nSender: ${senderEmail}\nRecipient: ${to}\nTimestamp: ${new Date().toISOString()}`,
     });
+
     return res.json({
       success: true,
+      message: `Test email sent and accepted by SMTP server for ${to}`,
+      sender: result.sender,
+      recipient: result.recipient,
       messageId: result.messageId,
-      senderEmail: SENDER_EMAIL,
-      to,
-      message: `Email sent to ${to}`,
+      smtpResponse: result.smtpResponse,
+      accepted: result.accepted,
+      rejected: result.rejected,
+      envelope: result.envelope,
     });
   } catch (err) {
+    console.error(`[TEST_SEND_ERROR] Test send failed to ${to}:`, err.message);
     return res.status(500).json({
       success: false,
+      message: "Test email sending failed",
       error: err.message,
-      senderEmail: SENDER_EMAIL,
-      to,
+      sender: senderEmail,
+      recipient: to,
     });
   }
 };
@@ -423,23 +506,18 @@ async function processSendQueue(campaignId) {
         .replace(/\{name\}/gi, clientName)
         .replace(/\{email\}/gi, recipient.email);
 
-      const trackingPixelHtml = `<img src="${serverUrl}/api/email-track/open?trackingId=${recipient.trackingId}" width="1" height="1" style="display:none;" alt="" />`;
-      const fullHtml = `<div>${personalizedBody}</div><br/>${trackingPixelHtml}`;
-
-      // Build attachments list (files must still exist on disk)
-      const mailAttachments = (campaign.attachments || [])
-        .filter((att) => att.path && fs.existsSync(att.path))
-        .map((att) => ({
-          filename: att.originalname || att.filename,
-          path: att.path,
-        }));
+      const trackingPixelHtml = (serverUrl && serverUrl.startsWith("https://"))
+        ? `<img src="${serverUrl}/api/email-track/open?trackingId=${recipient.trackingId}" width="1" height="1" style="display:none;" alt="" />`
+        : "";
+      const fullHtml = `<div>${personalizedBody}</div>${trackingPixelHtml ? `<br/>${trackingPixelHtml}` : ""}`;
 
       // Retry logic: try up to 3 times with increasing delay
       let sendSuccess = false;
       let lastError = null;
+      let sendResult = null;
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
-          await dispatchEmail({
+          sendResult = await dispatchEmail({
             to: recipient.email,
             subject: personalizedSubject,
             html: fullHtml,

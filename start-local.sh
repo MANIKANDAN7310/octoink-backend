@@ -12,5 +12,5 @@ echo "Setting SMTP_USER environment variable..."
 echo "(This matches the EMAIL_USER from .env)"
 echo ""
 
-export SMTP_USER=octoinkstudios7310@gmail.com
+export SMTP_USER=hello.octoinkstudios@gmail.com
 node server.js
