@@ -21,6 +21,8 @@ import {
   getB2BClients,
   getB2BClientById,
   updateB2BClientStatus,
+  checkDuplicateRecipients,
+  triggerSyncReplies,
   getAnalytics,
   testSend,
 } from "../controllers/emailTrackController.js";
@@ -54,8 +56,9 @@ router.get("/connection", checkConnection);
 // 1b. Test send diagnostic
 router.post("/test-send", testSend);
 
-// 2. Client parse
+// 2. Client parse & duplicate check
 router.post("/import-clients", uploadMemory.single("file"), parseClientFile);
+router.post("/check-duplicates", checkDuplicateRecipients);
 
 // 3. Campaigns
 router.get("/campaigns", getCampaigns);
@@ -74,6 +77,7 @@ router.post("/follow-up/stop", stopFollowUp);
 
 // 6. Replies & Leads
 router.get("/replies", getReplies);
+router.post("/replies/sync", triggerSyncReplies);
 router.post("/replies", createReply);
 router.patch("/replies/:id/status", updateReplyStatus);
 

@@ -8,10 +8,16 @@ const campaignRecipientSchema = new mongoose.Schema(
     isValidEmail: { type: Boolean, default: true },
     trackingId: { type: String, required: true, unique: true, index: true },
     
+    campaignName: { type: String, default: "" },
+    subject: { type: String, default: "" },
+    messageId: { type: String, default: "", index: true },
+    isDuplicate: { type: Boolean, default: false },
+    duplicateReason: { type: String, default: "" },
+    
     // Status flags
     status: {
       type: String,
-      enum: ["Ready", "Sending", "Sent", "Opened", "Replied", "Follow-up Pending", "Follow-up Sent", "Failed"],
+      enum: ["Ready", "Sending", "Sent", "Opened", "Replied", "Follow-up Pending", "Follow-up Sent", "Failed", "Already Sent", "Skipped"],
       default: "Ready",
     },
     

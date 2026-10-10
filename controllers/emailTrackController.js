@@ -9,6 +9,7 @@ import EmailOpen from "../models/EmailOpen.js";
 import EmailReply from "../models/EmailReply.js";
 import B2BClient from "../models/B2BClient.js";
 import EmailTemplate from "../models/EmailTemplate.js";
+import { syncIncomingReplies } from "../utils/replySync.js";
 
 // Global in-memory state for active queue loops (keyed by campaignId)
 const activeSendQueues = new Map();
@@ -314,6 +315,88 @@ export const testSend = async (req, res) => {
   }
 };
 
+// 1c. Duplicate Email Check across ALL campaigns
+export const checkDuplicateRecipients = async (req, res) => {
+  try {
+    const { emails } = req.body;
+    if (!emails || !Array.isArray(emails)) {
+      return res.status(400).json({ success: false, message: "Emails array is required" });
+    }
+
+    const normalizedEmails = emails
+      .map((e) => (typeof e === "string" ? e.trim().toLowerCase() : ""))
+      .filter(Boolean);
+
+    if (normalizedEmails.length === 0) {
+      return res.json({
+        success: true,
+        results: {},
+        alreadySentEmails: [],
+        alreadySentCount: 0,
+        readyCount: 0,
+      });
+    }
+
+    // 1. Query successful sends across ALL campaigns in EmailSendRecord
+    const sentRecords = await EmailSendRecord.find({
+      email: { $in: normalizedEmails },
+      status: "success",
+    }).lean();
+
+    // 2. Query sent recipients across ALL campaigns in CampaignRecipient
+    const sentRecipients = await CampaignRecipient.find({
+      email: { $in: normalizedEmails },
+      emailSent: true,
+    }).lean();
+
+    const resultMap = {};
+    const alreadySentSet = new Set();
+
+    sentRecords.forEach((rec) => {
+      const em = rec.email.toLowerCase().trim();
+      alreadySentSet.add(em);
+      resultMap[em] = {
+        alreadySent: true,
+        campaignId: rec.campaignId || "",
+        campaignName: rec.campaignName || "",
+        sentAt: rec.sentAt,
+      };
+    });
+
+    sentRecipients.forEach((rec) => {
+      const em = rec.email.toLowerCase().trim();
+      alreadySentSet.add(em);
+      if (!resultMap[em]) {
+        resultMap[em] = {
+          alreadySent: true,
+          campaignId: rec.campaignId || "",
+          campaignName: rec.campaignName || "",
+          sentAt: rec.sentAt,
+        };
+      }
+    });
+
+    normalizedEmails.forEach((em) => {
+      if (!resultMap[em]) {
+        resultMap[em] = { alreadySent: false };
+      }
+    });
+
+    const alreadySentEmails = Array.from(alreadySentSet);
+
+    return res.json({
+      success: true,
+      results: resultMap,
+      alreadySentEmails,
+      alreadySentCount: alreadySentEmails.length,
+      readyCount: normalizedEmails.length - alreadySentEmails.length,
+    });
+  } catch (err) {
+    console.error("Duplicate check error:", err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 // 2. Parse Excel/CSV Client File
 export const parseClientFile = async (req, res) => {
   try {
@@ -380,22 +463,72 @@ export const parseClientFile = async (req, res) => {
       if (!email && !companyName) continue;
       if (!companyName) companyName = email ? email.split("@")[0] : `Client #${i + 1}`;
 
-      const isValid = emailRegex.test(email);
+      const normalizedEmail = email.trim().toLowerCase();
+      const isValid = emailRegex.test(normalizedEmail);
       if (isValid) validCount++;
       else invalidCount++;
 
       clients.push({
         companyName,
-        email,
+        email: normalizedEmail,
         isValidEmail: isValid,
       });
     }
+
+    // Check all previous successful outreach sends across ALL campaigns
+    const normalizedParsedEmails = clients.map((c) => c.email).filter(Boolean);
+    const previousSends = await EmailSendRecord.find({
+      email: { $in: normalizedParsedEmails },
+      status: "success",
+    }).lean();
+
+    const previousRecipients = await CampaignRecipient.find({
+      email: { $in: normalizedParsedEmails },
+      emailSent: true,
+    }).lean();
+
+    const alreadyContactedMap = {};
+    previousSends.forEach((s) => {
+      const em = s.email.toLowerCase().trim();
+      alreadyContactedMap[em] = { campaignId: s.campaignId, campaignName: s.campaignName || s.campaignId };
+    });
+    previousRecipients.forEach((r) => {
+      const em = r.email.toLowerCase().trim();
+      if (!alreadyContactedMap[em]) {
+        alreadyContactedMap[em] = { campaignId: r.campaignId, campaignName: r.campaignName || r.campaignId };
+      }
+    });
+
+    let alreadySentCount = 0;
+    let readyToSendCount = 0;
+
+    clients.forEach((c) => {
+      const em = c.email.toLowerCase().trim();
+      if (alreadyContactedMap[em]) {
+        c.alreadySent = true;
+        c.isDuplicate = true;
+        c.status = "Already Sent";
+        c.duplicateReason = `Already contacted in ${alreadyContactedMap[em]?.campaignId || "previous outreach"}`;
+        alreadySentCount++;
+      } else if (c.isValidEmail) {
+        c.alreadySent = false;
+        c.isDuplicate = false;
+        c.status = "Ready";
+        readyToSendCount++;
+      } else {
+        c.alreadySent = false;
+        c.isDuplicate = false;
+        c.status = "Failed";
+      }
+    });
 
     return res.json({
       success: true,
       totalClients: clients.length,
       validEmails: validCount,
       invalidEmails: invalidCount,
+      alreadySentCount,
+      readyToSendCount,
       clients,
     });
   } catch (err) {
@@ -438,6 +571,32 @@ export const createCampaign = async (req, res) => {
     const campaignId = `CMP-${String(count + 1).padStart(3, "0")}`;
     const campaignName = name || `Campaign #${String(count + 1).padStart(3, "0")}`;
 
+    // Normalize all emails
+    const normalizedClientEmails = parsedClients.map((c) => (c.email ? String(c.email).trim().toLowerCase() : "")).filter(Boolean);
+
+    // Check ALL previous successful outreach sends across ALL campaigns
+    const previousSends = await EmailSendRecord.find({
+      email: { $in: normalizedClientEmails },
+      status: "success",
+    }).lean();
+
+    const previousRecipients = await CampaignRecipient.find({
+      email: { $in: normalizedClientEmails },
+      emailSent: true,
+    }).lean();
+
+    const alreadyContactedMap = {};
+    previousSends.forEach((s) => {
+      const em = s.email.toLowerCase().trim();
+      alreadyContactedMap[em] = s.campaignId;
+    });
+    previousRecipients.forEach((r) => {
+      const em = r.email.toLowerCase().trim();
+      if (!alreadyContactedMap[em]) {
+        alreadyContactedMap[em] = r.campaignId;
+      }
+    });
+
     const validClients = parsedClients.filter((c) => c.isValidEmail);
 
     const campaign = new Campaign({
@@ -455,16 +614,34 @@ export const createCampaign = async (req, res) => {
 
     await campaign.save();
 
-    // Create Recipient Documents
-    const recipientDocs = parsedClients.map((c) => ({
-      campaignId,
-      companyName: c.companyName || "Client",
-      email: c.email,
-      isValidEmail: c.isValidEmail,
-      trackingId: crypto.randomUUID(),
-      status: c.isValidEmail ? "Ready" : "Failed",
-      errorMessage: c.isValidEmail ? "" : "Invalid email address format",
-    }));
+    // Create Recipient Documents with Duplicate Protection & Status flags
+    const recipientDocs = parsedClients.map((c) => {
+      const normalizedEmail = (c.email || "").trim().toLowerCase();
+      const isAlreadySent = Boolean(
+        alreadyContactedMap[normalizedEmail] || c.alreadySent || c.status === "Already Sent"
+      );
+
+      return {
+        campaignId,
+        campaignName,
+        subject,
+        companyName: c.companyName || "Client",
+        email: normalizedEmail,
+        isValidEmail: Boolean(c.isValidEmail),
+        trackingId: crypto.randomUUID(),
+        isDuplicate: isAlreadySent,
+        duplicateReason: isAlreadySent
+          ? `Already contacted in previous campaign (${alreadyContactedMap[normalizedEmail] || "Outreach"})`
+          : "",
+        status: !c.isValidEmail ? "Failed" : isAlreadySent ? "Already Sent" : "Ready",
+        errorMessage: !c.isValidEmail
+          ? "Invalid email address format"
+          : isAlreadySent
+          ? "Skipped: Already contacted in previous campaign"
+          : "",
+        emailSent: false,
+      };
+    });
 
     if (recipientDocs.length > 0) {
       await CampaignRecipient.insertMany(recipientDocs);
@@ -539,14 +716,16 @@ async function processSendQueue(campaignId) {
 
     const serverUrl = process.env.VITE_API_URL || "http://localhost:4999";
 
-    // Fetch all recipients that are ready to send
+    // Fetch all recipients that are ready to send (strictly excluding duplicates/already sent)
     const recipients = await CampaignRecipient.find({
       campaignId,
       isValidEmail: true,
       emailSent: false,
+      status: { $nin: ["Already Sent", "Skipped", "Failed"] },
+      isDuplicate: { $ne: true },
     });
 
-    console.log(`📤 Campaign ${campaignId}: Processing ${recipients.length} recipients...`);
+    console.log(`📤 Campaign ${campaignId}: Processing ${recipients.length} eligible recipients...`);
 
     for (const recipient of recipients) {
       // Check if queue was stopped/paused by user
@@ -555,18 +734,27 @@ async function processSendQueue(campaignId) {
         break;
       }
 
-      // Requirement 6: Duplicate Email Protection
+      const normalizedEmail = (recipient.email || "").trim().toLowerCase();
+
+      // Requirement 4 & 6: Global Duplicate Email Protection across ALL previous campaigns
       const existingSend = await EmailSendRecord.findOne({
-        email: recipient.email,
-        campaignId,
-        type: "initial",
+        email: normalizedEmail,
         status: "success",
+        campaignId: { $ne: campaignId },
       });
 
-      if (existingSend) {
-        console.log(`🛡️ Skipping duplicate send for ${recipient.email}`);
-        recipient.emailSent = true;
-        recipient.status = "Sent";
+      const existingRecipient = await CampaignRecipient.findOne({
+        email: normalizedEmail,
+        emailSent: true,
+        campaignId: { $ne: campaignId },
+      });
+
+      if (existingSend || existingRecipient || recipient.status === "Already Sent" || recipient.isDuplicate) {
+        console.log(`🛡️ Skipping already contacted recipient ${recipient.email} (contacted previously in ${existingSend?.campaignId || existingRecipient?.campaignId || "outreach"})`);
+        recipient.status = "Already Sent";
+        recipient.isDuplicate = true;
+        recipient.duplicateReason = `Already contacted in ${existingSend?.campaignId || existingRecipient?.campaignId || "previous campaign"}`;
+        recipient.emailSent = false;
         await recipient.save();
         continue;
       }
@@ -616,18 +804,30 @@ async function processSendQueue(campaignId) {
       }
 
       if (sendSuccess) {
-        // Record successful send
-        await EmailSendRecord.create({
-          email: recipient.email,
-          campaignId,
-          type: "initial",
-          status: "success",
-          trackingId: recipient.trackingId,
-        });
+        // Record durable outbound send record with full metadata
+        await EmailSendRecord.findOneAndUpdate(
+          { email: normalizedEmail, campaignId, type: "initial" },
+          {
+            email: normalizedEmail,
+            recipientEmail: normalizedEmail,
+            recipientName: recipient.companyName,
+            companyName: recipient.companyName,
+            campaignId,
+            campaignName: campaign.name,
+            subject: personalizedSubject,
+            messageId: sendResult.messageId || "",
+            type: "initial",
+            status: "success",
+            trackingId: recipient.trackingId,
+            sentAt: new Date(),
+          },
+          { upsert: true, new: true }
+        );
 
         recipient.emailSent = true;
         recipient.status = "Sent";
         recipient.sentAt = new Date();
+        recipient.messageId = sendResult.messageId || "";
         recipient.lastActivityAt = new Date();
         await recipient.save();
 
@@ -769,11 +969,37 @@ export const trackOpenPixel = async (req, res) => {
   }
 };
 
-// 7. Get All Campaigns & Details
+// 7. Get All Campaigns & Details (calculated dynamically from actual recipient records)
 export const getCampaigns = async (req, res) => {
   try {
-    const campaigns = await Campaign.find().sort({ createdAt: -1 });
-    return res.json({ success: true, campaigns });
+    const campaigns = await Campaign.find().sort({ createdAt: -1 }).lean();
+
+    // Requirement 7: The statistics shown on the campaign history page must be calculated from actual recipient records
+    const enrichedCampaigns = await Promise.all(
+      campaigns.map(async (cmp) => {
+        const recs = await CampaignRecipient.find({ campaignId: cmp.campaignId }).lean();
+        const totalClients = recs.length;
+        const emailsSent = recs.filter((r) => r.emailSent).length;
+        const openedCount = recs.filter((r) => r.opened).length;
+        const replyCount = recs.filter((r) => r.replied).length;
+        const followUpsSent = recs.filter((r) => r.followUpSent).length;
+        const failedCount = recs.filter((r) => r.status === "Failed").length;
+        const skippedCount = recs.filter((r) => r.status === "Already Sent" || r.isDuplicate).length;
+
+        return {
+          ...cmp,
+          totalClients,
+          emailsSent,
+          openedCount,
+          replyCount,
+          followUpsSent,
+          failedCount,
+          skippedCount,
+        };
+      })
+    );
+
+    return res.json({ success: true, campaigns: enrichedCampaigns });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -782,16 +1008,36 @@ export const getCampaigns = async (req, res) => {
 export const getCampaignById = async (req, res) => {
   try {
     const { id } = req.params;
-    const campaign = await Campaign.findOne({ campaignId: id });
+    const campaign = await Campaign.findOne({ campaignId: id }).lean();
     if (!campaign) {
       return res.status(404).json({ success: false, message: "Campaign not found" });
     }
 
-    const recipients = await CampaignRecipient.find({ campaignId: id }).sort({ createdAt: 1 });
+    const recipients = await CampaignRecipient.find({ campaignId: id }).sort({ createdAt: 1 }).lean();
+
+    // Calculate accurate stats from actual recipient records
+    const totalClients = recipients.length;
+    const emailsSent = recipients.filter((r) => r.emailSent).length;
+    const openedCount = recipients.filter((r) => r.opened).length;
+    const replyCount = recipients.filter((r) => r.replied).length;
+    const followUpsSent = recipients.filter((r) => r.followUpSent).length;
+    const failedCount = recipients.filter((r) => r.status === "Failed").length;
+    const skippedCount = recipients.filter((r) => r.status === "Already Sent" || r.isDuplicate).length;
+
+    const accurateCampaign = {
+      ...campaign,
+      totalClients,
+      emailsSent,
+      openedCount,
+      replyCount,
+      followUpsSent,
+      failedCount,
+      skippedCount,
+    };
 
     return res.json({
       success: true,
-      campaign,
+      campaign: accurateCampaign,
       recipients,
     });
   } catch (err) {
@@ -973,8 +1219,23 @@ async function processFollowUpQueue(recipients, customSubject, customBody) {
 // 9. Replies & Leads Management
 export const getReplies = async (req, res) => {
   try {
+    // Run background sync from Gmail IMAP without blocking immediate response
+    syncIncomingReplies().catch((syncErr) =>
+      console.warn("[REPLY_SYNC_BACKGROUND_WARNING]", syncErr.message)
+    );
+
     const replies = await EmailReply.find().sort({ receivedAt: -1 });
     return res.json({ success: true, replies });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+export const triggerSyncReplies = async (req, res) => {
+  try {
+    const syncResult = await syncIncomingReplies();
+    const replies = await EmailReply.find().sort({ receivedAt: -1 });
+    return res.json({ success: true, ...syncResult, replies });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }

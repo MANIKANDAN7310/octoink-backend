@@ -40,6 +40,31 @@ function doPost(e) {
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
+    // Check if this is a request to fetch incoming replies
+    if (data.type === "get-replies" || data.type === "sync-replies") {
+      const threads = GmailApp.search("to:hello.octoinkstudios@gmail.com -from:hello.octoinkstudios@gmail.com", 0, 50);
+      const replies = [];
+      threads.forEach(function(thread) {
+        const msgs = thread.getMessages();
+        msgs.forEach(function(msg) {
+          const from = msg.getFrom();
+          if (from.toLowerCase().indexOf("hello.octoinkstudios@gmail.com") === -1) {
+            replies.push({
+              from: from,
+              subject: msg.getSubject(),
+              date: msg.getDate().toISOString(),
+              body: msg.getPlainBody(),
+              id: msg.getId()
+            });
+          }
+        });
+      });
+      return ContentService.createTextOutput(JSON.stringify({
+        success: true,
+        replies: replies
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
     // Determine if this is an OUTBOUND CAMPAIGN / OUTREACH EMAIL to a client
     const isOutboundCampaign = Boolean(
       data.type === "campaign" ||

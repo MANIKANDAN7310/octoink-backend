@@ -1,4 +1,4 @@
-﻿import express from "express";
+import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import path from "path";
@@ -400,6 +400,12 @@ import { reconcilePendingPayments } from './jobs/reconciliation.js';
 setInterval(() => {
     reconcilePendingPayments().catch(err => console.error(JSON.stringify({ type: "cron_reconcile_error", error: err.message })));
 }, 60 * 60 * 1000); // Run once every hour
+
+// Incoming Email Reply Auto-Sync (Every 5 minutes)
+import { syncIncomingReplies } from './utils/replySync.js';
+setInterval(() => {
+    syncIncomingReplies().catch(err => console.warn("[REPLY_SYNC_CRON_WARN]", err.message));
+}, 5 * 60 * 1000);
 
 // Run once 5 minutes after startup
 setTimeout(() => {
