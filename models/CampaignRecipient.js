@@ -4,6 +4,7 @@ const campaignRecipientSchema = new mongoose.Schema(
   {
     campaignId: { type: String, required: true, index: true },
     companyName: { type: String, required: true },
+    clientName: { type: String, default: "" },
     email: { type: String, required: true, lowercase: true, trim: true, index: true },
     isValidEmail: { type: Boolean, default: true },
     trackingId: { type: String, required: true, unique: true, index: true },

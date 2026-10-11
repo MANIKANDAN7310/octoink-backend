@@ -433,43 +433,126 @@ export const parseClientFile = async (req, res) => {
     const isRow0Header = row0.some((cell) => {
       const str = String(cell).trim().toLowerCase();
       return (
-        (str.includes("company") || str.includes("email") || str.includes("mail") || str.includes("name") || str.includes("org")) &&
+        (str.includes("company") || str.includes("email") || str.includes("mail") || str.includes("name") || str.includes("client")) &&
         !emailRegex.test(str)
       );
     });
 
+    let nameColIdx = -1;
+    let emailColIdx = -1;
+
     if (isRow0Header) {
       startRowIndex = 1;
+      row0.forEach((cell, idx) => {
+        const h = String(cell).trim().toLowerCase();
+        if (!h) return;
+
+        // Detect Email Column
+        if (h === "email" || h === "e-mail" || h === "mail" || h.includes("email") || h.includes("e-mail")) {
+          if (emailColIdx === -1) emailColIdx = idx;
+        }
+
+        // Detect Client Name Column - prioritize explicit client/customer/contact/person/full/first name
+        if (
+          h === "client name" ||
+          h === "client_name" ||
+          h === "clientname" ||
+          h === "customer name" ||
+          h === "customer_name" ||
+          h === "contact name" ||
+          h === "contact_name" ||
+          h === "full name" ||
+          h === "full_name" ||
+          h === "person name" ||
+          h === "person_name" ||
+          h === "contact person"
+        ) {
+          nameColIdx = idx;
+        } else if (nameColIdx === -1 && (h === "first name" || h === "firstname" || h === "first_name")) {
+          nameColIdx = idx;
+        } else if (nameColIdx === -1 && (h === "name" || h === "client" || h === "customer" || h === "contact")) {
+          nameColIdx = idx;
+        } else if (nameColIdx === -1 && h.includes("name") && !h.includes("company") && !h.includes("file") && !h.includes("domain") && !h.includes("org")) {
+          nameColIdx = idx;
+        }
+      });
     }
 
     for (let i = startRowIndex; i < rows.length; i++) {
       const row = rows[i];
       if (!row || row.length === 0) continue;
 
-      let companyName = "";
+      let clientName = "";
       let email = "";
 
-      row.forEach((cell) => {
-        const val = String(cell).trim();
-        if (!val) return;
-
-        if (emailRegex.test(val)) {
-          if (!email) email = val;
-        } else {
-          if (!companyName) companyName = val;
+      // 1. If explicit column indices were identified from headers:
+      if (emailColIdx !== -1 && row[emailColIdx] !== undefined) {
+        const candidateEmail = String(row[emailColIdx]).trim();
+        if (candidateEmail.includes("@")) {
+          email = candidateEmail;
         }
-      });
+      }
 
-      if (!email && !companyName) continue;
-      if (!companyName) companyName = email ? email.split("@")[0] : `Client #${i + 1}`;
+      if (nameColIdx !== -1 && row[nameColIdx] !== undefined) {
+        const candidateName = String(row[nameColIdx]).trim();
+        if (candidateName && !candidateName.includes("@")) {
+          clientName = candidateName;
+        }
+      }
 
-      const normalizedEmail = email.trim().toLowerCase();
+      // 2. If not found by index, inspect row cells
+      if (!email || !clientName) {
+        row.forEach((cell, colIdx) => {
+          const val = String(cell).trim();
+          if (!val) return;
+
+          if (emailRegex.test(val)) {
+            if (!email) email = val;
+          } else if (!val.includes("@") && !clientName) {
+            // Check if column is labeled company
+            if (isRow0Header) {
+              const h = String(row0[colIdx] || "").trim().toLowerCase();
+              if (h.includes("company") || h.includes("org") || h.includes("business") || h.includes("brand")) {
+                return; // skip company-related column when searching for client name
+              }
+            }
+            clientName = val;
+          }
+        });
+      }
+
+      // Fallback: if still no clientName, inspect any non-email string in row, skipping company columns
+      if (!clientName) {
+        for (let colIdx = 0; colIdx < row.length; colIdx++) {
+          if (isRow0Header) {
+            const h = String(row0[colIdx] || "").trim().toLowerCase();
+            if (h.includes("company") || h.includes("org") || h.includes("business") || h.includes("brand")) {
+              continue;
+            }
+          }
+          const val = String(row[colIdx]).trim();
+          if (val && !val.includes("@")) {
+            clientName = val;
+            break;
+          }
+        }
+      }
+
+      if (!email && !clientName) continue;
+
+      // RULE 4: Do NOT use the email address as the clientName / companyName
+      if (!clientName || clientName.includes("@")) {
+        clientName = "Client";
+      }
+
+      const normalizedEmail = email ? email.trim().toLowerCase() : "";
       const isValid = emailRegex.test(normalizedEmail);
       if (isValid) validCount++;
       else invalidCount++;
 
       clients.push({
-        companyName,
+        companyName: clientName, // maps to client name for {companyName} placeholder
+        clientName: clientName,
         email: normalizedEmail,
         isValidEmail: isValid,
       });
@@ -621,11 +704,18 @@ export const createCampaign = async (req, res) => {
         alreadyContactedMap[normalizedEmail] || c.alreadySent || c.status === "Already Sent"
       );
 
+      // Ensure client name is preserved and never an email address
+      let clientName = String(c.clientName || c.companyName || "").trim();
+      if (!clientName || clientName.includes("@")) {
+        clientName = "Client";
+      }
+
       return {
         campaignId,
         campaignName,
         subject,
-        companyName: c.companyName || "Client",
+        companyName: clientName,
+        clientName: clientName,
         email: normalizedEmail,
         isValidEmail: Boolean(c.isValidEmail),
         trackingId: crypto.randomUUID(),
@@ -759,8 +849,12 @@ async function processSendQueue(campaignId) {
         continue;
       }
 
-      // Construct personalized email body & subject
-      const clientName = recipient.companyName || recipient.email.split('@')[0];
+      // Construct personalized email body & subject per recipient
+      let clientName = String(recipient.clientName || recipient.companyName || "").trim();
+      if (!clientName || clientName.includes("@")) {
+        clientName = "Client";
+      }
+
       let personalizedBody = campaign.body
         .replace(/\{companyName\}/gi, clientName)
         .replace(/\{company\}/gi, clientName)
@@ -810,8 +904,8 @@ async function processSendQueue(campaignId) {
           {
             email: normalizedEmail,
             recipientEmail: normalizedEmail,
-            recipientName: recipient.companyName,
-            companyName: recipient.companyName,
+            recipientName: clientName,
+            companyName: clientName,
             campaignId,
             campaignName: campaign.name,
             subject: personalizedSubject,
@@ -840,7 +934,7 @@ async function processSendQueue(campaignId) {
         let b2bClient = await B2BClient.findOne({ email: recipient.email });
         if (!b2bClient) {
           b2bClient = new B2BClient({
-            companyName: recipient.companyName,
+            companyName: clientName,
             email: recipient.email,
             campaignId,
             status: "Contacted",
@@ -1151,7 +1245,10 @@ async function processFollowUpQueue(recipients, customSubject, customBody) {
         continue;
       }
 
-      const clientName = recipient.companyName || recipient.email.split('@')[0];
+      let clientName = String(recipient.clientName || recipient.companyName || "").trim();
+      if (!clientName || clientName.includes("@")) {
+        clientName = "Client";
+      }
       const rawSubject = customSubject || `Follow-up regarding Octoink Studios`;
       const rawBody = customBody || `<p>Hi {companyName},</p><p>I wanted to quickly follow up on my previous email. Let us know if you have any questions or would like to schedule a call!</p><p>Best regards,<br/>Octoink Studios</p>`;
 
