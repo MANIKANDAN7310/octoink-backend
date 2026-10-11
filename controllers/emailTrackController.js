@@ -1224,7 +1224,21 @@ export const getReplies = async (req, res) => {
       console.warn("[REPLY_SYNC_BACKGROUND_WARNING]", syncErr.message)
     );
 
-    const replies = await EmailReply.find().sort({ receivedAt: -1 });
+    const rawReplies = await EmailReply.find().sort({ receivedAt: -1, createdAt: -1 });
+    const replies = rawReplies.map((r) => {
+      const doc = r.toObject ? r.toObject() : r;
+      const email = doc.email || doc.sender || "";
+      return {
+        ...doc,
+        email,
+        companyName: doc.companyName || doc.clientName || (email ? email.split("@")[0] : "Client"),
+        originalCampaignName: doc.originalCampaignName || doc.campaignId || "Outreach Campaign",
+        originalSubject: doc.originalSubject || "Octoink Outreach",
+        replySubject: doc.replySubject || doc.subject || "Re: Inquiry",
+        replyMessage: doc.replyMessage || doc.body || "",
+      };
+    });
+
     return res.json({ success: true, replies });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
@@ -1234,7 +1248,21 @@ export const getReplies = async (req, res) => {
 export const triggerSyncReplies = async (req, res) => {
   try {
     const syncResult = await syncIncomingReplies();
-    const replies = await EmailReply.find().sort({ receivedAt: -1 });
+    const rawReplies = await EmailReply.find().sort({ receivedAt: -1, createdAt: -1 });
+    const replies = rawReplies.map((r) => {
+      const doc = r.toObject ? r.toObject() : r;
+      const email = doc.email || doc.sender || "";
+      return {
+        ...doc,
+        email,
+        companyName: doc.companyName || doc.clientName || (email ? email.split("@")[0] : "Client"),
+        originalCampaignName: doc.originalCampaignName || doc.campaignId || "Outreach Campaign",
+        originalSubject: doc.originalSubject || "Octoink Outreach",
+        replySubject: doc.replySubject || doc.subject || "Re: Inquiry",
+        replyMessage: doc.replyMessage || doc.body || "",
+      };
+    });
+
     return res.json({ success: true, ...syncResult, replies });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });

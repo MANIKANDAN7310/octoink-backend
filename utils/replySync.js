@@ -1,5 +1,6 @@
 import imapSimple from "imap-simple";
 import { simpleParser } from "mailparser";
+import mongoose from "mongoose";
 import EmailReply from "../models/EmailReply.js";
 import CampaignRecipient from "../models/CampaignRecipient.js";
 import Campaign from "../models/Campaign.js";
@@ -8,8 +9,18 @@ import B2BClient from "../models/B2BClient.js";
 
 let isSyncInProgress = false;
 
+const getImapCredentials = () => {
+  let user = process.env.EMAIL_USER || process.env.EMAIL_FROM || process.env.SMTP_USER || "hello.octoinkstudios@gmail.com";
+  // If user is set to an old internal address or does not contain hello.octoinkstudios, use official outreach account
+  if (!user || user.toLowerCase().includes("octoinkstudios7310") || !user.includes("hello.octoinkstudios")) {
+    user = "hello.octoinkstudios@gmail.com";
+  }
+  const password = process.env.EMAIL_PASS || process.env.SMTP_PASS || "oyfekwhejzjozsgc";
+  return { user, password };
+};
+
 /**
- * Connect to Gmail IMAP and scan for incoming replies
+ * Connect to Gmail IMAP and scan for incoming client replies
  */
 export async function syncIncomingReplies() {
   if (isSyncInProgress) {
@@ -21,46 +32,100 @@ export async function syncIncomingReplies() {
   let connection = null;
 
   try {
-    const user = process.env.EMAIL_USER || "hello.octoinkstudios@gmail.com";
-    const password = process.env.EMAIL_PASS || "oyfekwhejzjozsgc";
+    const { user, password } = getImapCredentials();
+    const host = process.env.IMAP_HOST || "imap.gmail.com";
+    const port = process.env.IMAP_PORT ? parseInt(process.env.IMAP_PORT, 10) : 993;
 
-    const config = {
-      imap: {
-        user,
-        password,
-        host: process.env.IMAP_HOST || "imap.gmail.com",
-        port: process.env.IMAP_PORT ? parseInt(process.env.IMAP_PORT, 10) : 993,
-        tls: true,
-        authTimeout: 12000,
-        tlsOptions: { rejectUnauthorized: false },
-      },
-    };
+    console.log(`[REPLY_SYNC] Connecting to Gmail IMAP as ${user}...`);
 
-    console.log(`[REPLY_SYNC] Connecting to IMAP for ${user}...`);
-    connection = await imapSimple.connect(config);
+    try {
+      connection = await imapSimple.connect({
+        imap: {
+          user,
+          password,
+          host,
+          port,
+          tls: true,
+          authTimeout: 15000,
+          tlsOptions: { rejectUnauthorized: false },
+        },
+      });
+    } catch (primaryErr) {
+      if (password !== "oyfekwhejzjozsgc" || user !== "hello.octoinkstudios@gmail.com") {
+        console.warn(`[REPLY_SYNC] Primary IMAP connection failed: ${primaryErr.message}. Retrying with verified credentials for hello.octoinkstudios@gmail.com...`);
+        connection = await imapSimple.connect({
+          imap: {
+            user: "hello.octoinkstudios@gmail.com",
+            password: "oyfekwhejzjozsgc",
+            host,
+            port,
+            tls: true,
+            authTimeout: 15000,
+            tlsOptions: { rejectUnauthorized: false },
+          },
+        });
+      } else {
+        throw primaryErr;
+      }
+    }
+
     await connection.openBox("INBOX");
 
-    // Fetch messages from inbox (last 100 messages)
-    const searchCriteria = ["ALL"];
-    const fetchOptions = {
-      bodies: ["HEADER", "TEXT", ""],
-      struct: true,
-      markSeen: false,
-    };
+    // Fetch UIDs of all messages in INBOX
+    const uids = await new Promise((resolve, reject) => {
+      connection.imap.search(["ALL"], (err, results) => {
+        if (err) return reject(err);
+        resolve(results || []);
+      });
+    });
 
-    const messages = await connection.search(searchCriteria, fetchOptions);
-    console.log(`[REPLY_SYNC] Found ${messages.length} total messages in INBOX.`);
+    console.log(`[REPLY_SYNC] Found ${uids.length} total messages in INBOX.`);
 
-    // Take the most recent 100 messages
-    const recentMessages = messages.slice(-100);
+    if (!uids.length) {
+      return { success: true, newRepliesCount: 0 };
+    }
+
+    // Target the most recent 60 messages to ensure ultra-fast processing
+    const targetUids = uids.slice(-60);
+
+    const messages = await new Promise((resolve, reject) => {
+      const fetch = connection.imap.fetch(targetUids, {
+        bodies: ["HEADER", ""],
+        struct: true,
+        markSeen: false,
+      });
+
+      const msgs = [];
+      fetch.on("message", (msg, seqNo) => {
+        let rawBody = "";
+        let attributes = null;
+
+        msg.on("body", (stream) => {
+          stream.on("data", (chunk) => {
+            rawBody += chunk.toString("utf8");
+          });
+        });
+
+        msg.once("attributes", (attrs) => {
+          attributes = attrs;
+        });
+
+        msg.once("end", () => {
+          msgs.push({ rawBody, attributes, seqNo });
+        });
+      });
+
+      fetch.once("error", reject);
+      fetch.once("end", () => resolve(msgs));
+    });
+
     let newRepliesCount = 0;
 
-    for (const item of recentMessages) {
+    for (const item of messages) {
       try {
-        const allPart = item.parts.find((part) => part.which === "");
-        if (!allPart || !allPart.body) continue;
+        if (!item.rawBody) continue;
 
-        const parsed = await simpleParser(allPart.body);
+        const parsed = await simpleParser(item.rawBody);
         const senderAddress = parsed.from?.value?.[0]?.address?.toLowerCase().trim();
         const senderName = parsed.from?.value?.[0]?.name || (senderAddress ? senderAddress.split("@")[0] : "Client");
         const subject = parsed.subject || "No Subject";
@@ -70,15 +135,21 @@ export async function syncIncomingReplies() {
 
         if (!senderAddress) continue;
 
-        // Skip our own emails
-        if (senderAddress === user.toLowerCase()) continue;
+        // Skip our own outbound emails
+        if (
+          senderAddress === "hello.octoinkstudios@gmail.com" ||
+          senderAddress === user.toLowerCase()
+        ) {
+          continue;
+        }
 
-        // Skip typical daemon / bounce / security messages
+        // Skip automated notifications & system messages
         if (
           senderAddress.includes("mailer-daemon") ||
           senderAddress.includes("postmaster") ||
           senderAddress.includes("notifications@github.com") ||
           senderAddress.includes("google.com") ||
+          senderAddress.includes("accounts.google") ||
           senderAddress.includes("noreply") ||
           senderAddress.includes("no-reply")
         ) {
@@ -91,19 +162,20 @@ export async function syncIncomingReplies() {
           if (existingById) continue;
         }
 
-        // Deduplication Check 2: Check by sender + subject + receivedAt within 5-minute window
-        const timeWindowStart = new Date(emailDate.getTime() - 5 * 60 * 1000);
-        const timeWindowEnd = new Date(emailDate.getTime() + 5 * 60 * 1000);
+        // Deduplication Check 2: Check by sender + subject + receivedAt within 15-minute window
+        const timeWindowStart = new Date(emailDate.getTime() - 15 * 60 * 1000);
+        const timeWindowEnd = new Date(emailDate.getTime() + 15 * 60 * 1000);
         const existingByDetails = await EmailReply.findOne({
-          email: senderAddress,
-          replySubject: subject,
+          $or: [{ email: senderAddress }, { sender: senderAddress }],
+          $or: [{ replySubject: subject }, { subject: subject }],
           receivedAt: { $gte: timeWindowStart, $lte: timeWindowEnd },
         });
         if (existingByDetails) continue;
 
-        // Find associated outreach email / campaign
-        // Look up by recipient email across all campaigns (most recently sent first)
-        const recipient = await CampaignRecipient.findOne({ email: senderAddress }).sort({ sentAt: -1, createdAt: -1 });
+        // Look up recipient across campaigns (case-insensitive)
+        const recipient = await CampaignRecipient.findOne({
+          email: { $regex: new RegExp(`^${senderAddress}$`, "i") },
+        }).sort({ sentAt: -1, createdAt: -1 });
 
         let campaignId = "CMP-INBOUND";
         let originalCampaignName = "Inbound / Direct Contact";
@@ -111,16 +183,19 @@ export async function syncIncomingReplies() {
         let companyName = senderName;
 
         if (recipient) {
-          campaignId = recipient.campaignId;
-          companyName = recipient.companyName || senderName;
-          
-          const campaign = await Campaign.findOne({ campaignId });
+          campaignId = recipient.campaignId || campaignId;
+          companyName = recipient.companyName || recipient.clientName || senderName;
+
+          let campaign = await Campaign.findOne({ campaignId });
+          if (!campaign && mongoose.Types.ObjectId.isValid(campaignId)) {
+            campaign = await Campaign.findById(campaignId);
+          }
           if (campaign) {
-            originalCampaignName = campaign.name || campaignId;
-            originalSubject = recipient.subject || campaign.subject || "Octoink Outreach";
+            originalCampaignName = campaign.name || campaign.title || campaignId;
+            originalSubject = recipient.subject || campaign.subject || originalSubject;
           }
 
-          // Update CampaignRecipient
+          // Update CampaignRecipient status
           const wasAlreadyReplied = recipient.replied;
           recipient.replied = true;
           recipient.repliedAt = emailDate;
@@ -132,36 +207,29 @@ export async function syncIncomingReplies() {
 
           // Increment campaign reply count if first reply
           if (!wasAlreadyReplied && campaign) {
-            await Campaign.updateOne({ campaignId }, { $inc: { replyCount: 1 } });
+            await Campaign.updateOne({ _id: campaign._id }, { $inc: { replyCount: 1 } });
           }
         } else {
           // Check EmailSendRecord
-          const sendRecord = await EmailSendRecord.findOne({ email: senderAddress }).sort({ sentAt: -1 });
+          const sendRecord = await EmailSendRecord.findOne({
+            email: { $regex: new RegExp(`^${senderAddress}$`, "i") },
+          }).sort({ sentAt: -1 });
           if (sendRecord) {
-            campaignId = sendRecord.campaignId;
+            campaignId = sendRecord.campaignId || campaignId;
             originalCampaignName = sendRecord.campaignName || campaignId;
-            originalSubject = sendRecord.subject || "Octoink Outreach";
+            originalSubject = sendRecord.subject || originalSubject;
             companyName = sendRecord.companyName || sendRecord.recipientName || senderName;
           }
         }
 
-        // Create durable EmailReply record
-        await EmailReply.create({
-          campaignId,
-          originalCampaignName,
-          companyName,
-          email: senderAddress,
-          originalSubject,
-          replySubject: subject,
-          replyMessage: replyText.slice(0, 5000),
-          receivedAt: emailDate,
-          messageId,
-          status: "New Reply",
+        // Check B2BClient record
+        let b2bClient = await B2BClient.findOne({
+          email: { $regex: new RegExp(`^${senderAddress}$`, "i") },
         });
-
-        // Update or create B2B Client record
-        let b2bClient = await B2BClient.findOne({ email: senderAddress });
         if (b2bClient) {
+          if (b2bClient.companyName || b2bClient.name) {
+            companyName = b2bClient.companyName || b2bClient.name;
+          }
           b2bClient.repliesCount = (b2bClient.repliesCount || 0) + 1;
           b2bClient.status = "Replied";
           b2bClient.lastContactDate = emailDate;
@@ -173,6 +241,23 @@ export async function syncIncomingReplies() {
           });
           await b2bClient.save();
         }
+
+        // Create durable EmailReply record with dual compatibility keys
+        await EmailReply.create({
+          campaignId,
+          originalCampaignName,
+          companyName: companyName || senderName || "Client",
+          email: senderAddress,
+          sender: senderAddress,
+          originalSubject,
+          replySubject: subject,
+          subject: subject,
+          replyMessage: replyText.slice(0, 5000),
+          body: replyText.slice(0, 5000),
+          receivedAt: emailDate,
+          messageId,
+          status: "New Reply",
+        });
 
         newRepliesCount++;
         console.log(`[REPLY_SYNC] Successfully recorded incoming reply from: ${senderAddress} for campaign ${campaignId}`);

@@ -8,7 +8,10 @@ const emailReplySchema = new mongoose.Schema(
     email: { type: String, required: true, lowercase: true, trim: true, index: true },
     originalSubject: { type: String, default: "" },
     replySubject: { type: String, default: "" },
-    replyMessage: { type: String, required: true },
+    replyMessage: { type: String, default: "" },
+    sender: { type: String, default: "" },
+    subject: { type: String, default: "" },
+    body: { type: String, default: "" },
     receivedAt: { type: Date, default: Date.now },
     messageId: { type: String, default: "", index: true },
     status: {
