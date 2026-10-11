@@ -9,7 +9,7 @@ import EmailOpen from "../models/EmailOpen.js";
 import EmailReply from "../models/EmailReply.js";
 import B2BClient from "../models/B2BClient.js";
 import EmailTemplate from "../models/EmailTemplate.js";
-import { syncIncomingReplies } from "../utils/replySync.js";
+import { syncIncomingReplies, isOwnSender } from "../utils/replySync.js";
 
 // Global in-memory state for active queue loops (keyed by campaignId)
 const activeSendQueues = new Map();
@@ -1225,19 +1225,25 @@ export const getReplies = async (req, res) => {
     );
 
     const rawReplies = await EmailReply.find().sort({ receivedAt: -1, createdAt: -1 });
-    const replies = rawReplies.map((r) => {
-      const doc = r.toObject ? r.toObject() : r;
-      const email = doc.email || doc.sender || "";
-      return {
-        ...doc,
-        email,
-        companyName: doc.companyName || doc.clientName || (email ? email.split("@")[0] : "Client"),
-        originalCampaignName: doc.originalCampaignName || doc.campaignId || "Outreach Campaign",
-        originalSubject: doc.originalSubject || "Octoink Outreach",
-        replySubject: doc.replySubject || doc.subject || "Re: Inquiry",
-        replyMessage: doc.replyMessage || doc.body || "",
-      };
-    });
+    const replies = rawReplies
+      .filter((r) => {
+        const doc = r.toObject ? r.toObject() : r;
+        const email = (doc.email || doc.sender || "").trim().toLowerCase();
+        return !isOwnSender(email);
+      })
+      .map((r) => {
+        const doc = r.toObject ? r.toObject() : r;
+        const email = doc.email || doc.sender || "";
+        return {
+          ...doc,
+          email,
+          companyName: doc.companyName || doc.clientName || (email ? email.split("@")[0] : "Client"),
+          originalCampaignName: doc.originalCampaignName || doc.campaignId || "Outreach Campaign",
+          originalSubject: doc.originalSubject || "Octoink Outreach",
+          replySubject: doc.replySubject || doc.subject || "Re: Inquiry",
+          replyMessage: doc.replyMessage || doc.body || "",
+        };
+      });
 
     return res.json({ success: true, replies });
   } catch (err) {
@@ -1249,19 +1255,25 @@ export const triggerSyncReplies = async (req, res) => {
   try {
     const syncResult = await syncIncomingReplies();
     const rawReplies = await EmailReply.find().sort({ receivedAt: -1, createdAt: -1 });
-    const replies = rawReplies.map((r) => {
-      const doc = r.toObject ? r.toObject() : r;
-      const email = doc.email || doc.sender || "";
-      return {
-        ...doc,
-        email,
-        companyName: doc.companyName || doc.clientName || (email ? email.split("@")[0] : "Client"),
-        originalCampaignName: doc.originalCampaignName || doc.campaignId || "Outreach Campaign",
-        originalSubject: doc.originalSubject || "Octoink Outreach",
-        replySubject: doc.replySubject || doc.subject || "Re: Inquiry",
-        replyMessage: doc.replyMessage || doc.body || "",
-      };
-    });
+    const replies = rawReplies
+      .filter((r) => {
+        const doc = r.toObject ? r.toObject() : r;
+        const email = (doc.email || doc.sender || "").trim().toLowerCase();
+        return !isOwnSender(email);
+      })
+      .map((r) => {
+        const doc = r.toObject ? r.toObject() : r;
+        const email = doc.email || doc.sender || "";
+        return {
+          ...doc,
+          email,
+          companyName: doc.companyName || doc.clientName || (email ? email.split("@")[0] : "Client"),
+          originalCampaignName: doc.originalCampaignName || doc.campaignId || "Outreach Campaign",
+          originalSubject: doc.originalSubject || "Octoink Outreach",
+          replySubject: doc.replySubject || doc.subject || "Re: Inquiry",
+          replyMessage: doc.replyMessage || doc.body || "",
+        };
+      });
 
     return res.json({ success: true, ...syncResult, replies });
   } catch (err) {
@@ -1287,6 +1299,13 @@ export const updateReplyStatus = async (req, res) => {
 export const createReply = async (req, res) => {
   try {
     const { email, replySubject, replyMessage, campaignId } = req.body;
+
+    if (!email || isOwnSender(email)) {
+      return res.status(400).json({
+        success: false,
+        message: "Cannot create a client reply from an internal or outreach sender account.",
+      });
+    }
 
     const recipient = await CampaignRecipient.findOne({ email });
     const companyName = recipient ? recipient.companyName : email.split("@")[0];
