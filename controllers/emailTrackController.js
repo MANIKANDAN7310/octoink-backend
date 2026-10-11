@@ -1230,6 +1230,17 @@ async function processFollowUpQueue(recipients, customSubject, customBody) {
         continue;
       }
 
+      // Safeguard: Check if client has already replied in EmailReply database
+      const clientHasReplied = await EmailReply.findOne({
+        $or: [{ email: recipient.email.toLowerCase() }, { sender: recipient.email.toLowerCase() }],
+      });
+      if (clientHasReplied) {
+        console.log(`[FOLLOW_UP_GUARD] Skipping follow-up for ${recipient.email}: Client has already sent a reply.`);
+        latestRecipient.replied = true;
+        await latestRecipient.save();
+        continue;
+      }
+
       // Check duplicate protection for followups
       const existingSend = await EmailSendRecord.findOne({
         email: recipient.email,
@@ -1314,6 +1325,13 @@ async function processFollowUpQueue(recipients, customSubject, customBody) {
 }
 
 // 9. Replies & Leads Management
+// STRICT ARCHITECTURAL POLICY:
+// The entire Replies & Leads module is strictly READ-ONLY.
+// Absolutely ZERO outbound emails are sent when:
+//   - Scanning/syncing incoming client replies.
+//   - Viewing client replies.
+//   - Updating internal lead statuses (New Reply, Qualified, Contacted, Converted, Follow-up, Closed).
+//   - Manually logging replies.
 export const getReplies = async (req, res) => {
   try {
     // Run background sync from Gmail IMAP without blocking immediate response
@@ -1342,7 +1360,7 @@ export const getReplies = async (req, res) => {
         };
       });
 
-    return res.json({ success: true, replies });
+    return res.json({ success: true, replies, outboundEmailsSent: 0 });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -1350,6 +1368,7 @@ export const getReplies = async (req, res) => {
 
 export const triggerSyncReplies = async (req, res) => {
   try {
+    console.log("[REPLY_SYNC_TRIGGER] 'Sync Incoming Replies' initiated. Strictly reading inbox. ZERO outbound emails sent.");
     const syncResult = await syncIncomingReplies();
     const rawReplies = await EmailReply.find().sort({ receivedAt: -1, createdAt: -1 });
     const replies = rawReplies
@@ -1372,7 +1391,8 @@ export const triggerSyncReplies = async (req, res) => {
         };
       });
 
-    return res.json({ success: true, ...syncResult, replies });
+    console.log(`[REPLY_SYNC_TRIGGER_DONE] Fetched ${replies.length} replies. ZERO outbound emails sent.`);
+    return res.json({ success: true, ...syncResult, replies, outboundEmailsSent: 0 });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -1383,16 +1403,28 @@ export const updateReplyStatus = async (req, res) => {
     const { id } = req.params;
     const { status } = req.body;
 
+    // Validate that the status is a recognized internal lead status
+    const allowedStatuses = ["New Reply", "Qualified", "Contacted", "Converted", "Follow-up", "Closed"];
+    if (status && !allowedStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid status "${status}". Allowed: ${allowedStatuses.join(", ")}`,
+      });
+    }
+
+    console.log(`[REPLY_STATUS_UPDATE] Updating reply ${id} status to "${status}". STRICT POLICY: Zero emails sent.`);
     const reply = await EmailReply.findByIdAndUpdate(id, { status }, { new: true });
     if (!reply) return res.status(404).json({ success: false, message: "Reply not found" });
 
-    return res.json({ success: true, reply });
+    // CRITICAL REQUIREMENT: Status changes NEVER trigger any outbound email
+    return res.json({ success: true, reply, outboundEmailsSent: 0 });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
 };
 
 // Create a manual or simulated reply for testing / incoming emails
+// STRICT REQUIREMENT: Does NOT send any email
 export const createReply = async (req, res) => {
   try {
     const { email, replySubject, replyMessage, campaignId } = req.body;
@@ -1403,6 +1435,8 @@ export const createReply = async (req, res) => {
         message: "Cannot create a client reply from an internal or outreach sender account.",
       });
     }
+
+    console.log(`[MANUAL_REPLY_LOG] Recording manual client reply from ${email}. ZERO outbound emails sent.`);
 
     const recipient = await CampaignRecipient.findOne({ email });
     const companyName = recipient ? recipient.companyName : email.split("@")[0];
@@ -1446,7 +1480,7 @@ export const createReply = async (req, res) => {
       await b2b.save();
     }
 
-    return res.status(201).json({ success: true, reply });
+    return res.status(201).json({ success: true, reply, outboundEmailsSent: 0 });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }

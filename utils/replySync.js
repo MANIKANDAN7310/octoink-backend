@@ -7,7 +7,24 @@ import Campaign from "../models/Campaign.js";
 import EmailSendRecord from "../models/EmailSendRecord.js";
 import B2BClient from "../models/B2BClient.js";
 
+// ============================================================================
+// INCOMING CLIENT REPLY SYNC SERVICE
+// 
+// STRICT REQUIREMENT & ARCHITECTURAL GUARANTEE:
+// This service is strictly READ-ONLY with respect to email communication.
+// When incoming client replies are detected and saved:
+//   - ZERO outbound emails are sent back to the client.
+//   - No acknowledgement, confirmation, notification, or auto-reply is ever sent.
+//   - No email sending function (Nodemailer, SMTP, Apps Script, Resend) is imported or called.
+// ============================================================================
+
 let isSyncInProgress = false;
+
+// Helper to safely escape special characters in regular expressions
+export function escapeRegex(str) {
+  if (!str || typeof str !== "string") return "";
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 /**
  * Builds the dynamic list of excluded internal / sender accounts.
@@ -255,19 +272,21 @@ export async function syncIncomingReplies() {
           subject.toLowerCase().startsWith("fwd:")
         );
 
+        const escapedSender = escapeRegex(senderAddress);
+
         // Look up recipient across campaigns (case-insensitive)
         const recipient = await CampaignRecipient.findOne({
-          email: { $regex: new RegExp(`^${senderAddress}$`, "i") },
+          email: { $regex: new RegExp(`^${escapedSender}$`, "i") },
         }).sort({ sentAt: -1, createdAt: -1 });
 
         // Check EmailSendRecord
         const sendRecord = await EmailSendRecord.findOne({
-          email: { $regex: new RegExp(`^${senderAddress}$`, "i") },
+          email: { $regex: new RegExp(`^${escapedSender}$`, "i") },
         }).sort({ sentAt: -1 });
 
         // Check B2BClient record
         let b2bClient = await B2BClient.findOne({
-          email: { $regex: new RegExp(`^${senderAddress}$`, "i") },
+          email: { $regex: new RegExp(`^${escapedSender}$`, "i") },
         });
 
         // If sender is NOT in any campaign, NOT in send records, NOT in B2B clients,
@@ -276,21 +295,51 @@ export async function syncIncomingReplies() {
           continue;
         }
 
-        // Deduplication Check 1: Check by messageId
-        if (messageId) {
-          const existingById = await EmailReply.findOne({ messageId });
+        // Deduplication Check 1: Check by messageId (normalized with and without brackets)
+        const rawMsgId = (parsed.messageId || "").trim();
+        const cleanMsgId = rawMsgId.replace(/^<|>$/g, "").trim();
+        const fallbackMsgId = `${item.attributes?.uid || ""}-${senderAddress}`;
+        const uniqueMessageId = rawMsgId || fallbackMsgId;
+
+        if (cleanMsgId) {
+          const existingById = await EmailReply.findOne({
+            $or: [
+              { messageId: rawMsgId },
+              { messageId: `<${cleanMsgId}>` },
+              { messageId: cleanMsgId },
+            ],
+          });
+          if (existingById) continue;
+        } else if (uniqueMessageId) {
+          const existingById = await EmailReply.findOne({ messageId: uniqueMessageId });
           if (existingById) continue;
         }
 
         // Deduplication Check 2: Check by sender + subject + receivedAt within 15-minute window
+        // Use $and so separate $or clauses do not overwrite each other in JavaScript object notation
         const timeWindowStart = new Date(emailDate.getTime() - 15 * 60 * 1000);
         const timeWindowEnd = new Date(emailDate.getTime() + 15 * 60 * 1000);
         const existingByDetails = await EmailReply.findOne({
-          $or: [{ email: senderAddress }, { sender: senderAddress }],
-          $or: [{ replySubject: subject }, { subject: subject }],
-          receivedAt: { $gte: timeWindowStart, $lte: timeWindowEnd },
+          $and: [
+            { $or: [{ email: senderAddress }, { sender: senderAddress }] },
+            { $or: [{ replySubject: subject }, { subject: subject }] },
+            { receivedAt: { $gte: timeWindowStart, $lte: timeWindowEnd } },
+          ],
         });
         if (existingByDetails) continue;
+
+        // Deduplication Check 3: Check by sender + exact reply content within 24 hours
+        if (replyText) {
+          const truncatedBody = replyText.slice(0, 5000);
+          const existingByContent = await EmailReply.findOne({
+            $and: [
+              { $or: [{ email: senderAddress }, { sender: senderAddress }] },
+              { $or: [{ replyMessage: truncatedBody }, { body: truncatedBody }] },
+              { receivedAt: { $gte: new Date(emailDate.getTime() - 24 * 60 * 60 * 1000), $lte: new Date(emailDate.getTime() + 24 * 60 * 60 * 1000) } },
+            ],
+          });
+          if (existingByContent) continue;
+        }
 
         let campaignId = "CMP-INBOUND";
         let originalCampaignName = "Inbound / Direct Contact";
@@ -310,15 +359,21 @@ export async function syncIncomingReplies() {
             originalSubject = recipient.subject || campaign.subject || originalSubject;
           }
 
-          // Update CampaignRecipient status
+          // Update ALL matching CampaignRecipient records for this client so they are permanently marked replied
           const wasAlreadyReplied = recipient.replied;
-          recipient.replied = true;
-          recipient.repliedAt = emailDate;
-          recipient.replySubject = subject;
-          recipient.replyMessage = replyText.slice(0, 1500);
-          recipient.status = "Replied";
-          recipient.lastActivityAt = emailDate;
-          await recipient.save();
+          await CampaignRecipient.updateMany(
+            { email: { $regex: new RegExp(`^${escapedSender}$`, "i") } },
+            {
+              $set: {
+                replied: true,
+                repliedAt: emailDate,
+                replySubject: subject,
+                replyMessage: replyText.slice(0, 1500),
+                status: "Replied",
+                lastActivityAt: emailDate,
+              },
+            }
+          );
 
           // Increment campaign reply count if first reply
           if (!wasAlreadyReplied && campaign) {
@@ -349,6 +404,7 @@ export async function syncIncomingReplies() {
         }
 
         // Create durable EmailReply record with dual compatibility keys
+        // CRITICAL POLICY: ZERO outbound emails are triggered. This is strictly a database record creation.
         await EmailReply.create({
           campaignId,
           originalCampaignName,
@@ -361,18 +417,18 @@ export async function syncIncomingReplies() {
           replyMessage: replyText.slice(0, 5000),
           body: replyText.slice(0, 5000),
           receivedAt: emailDate,
-          messageId,
+          messageId: uniqueMessageId,
           status: "New Reply",
         });
 
         newRepliesCount++;
-        console.log(`[REPLY_SYNC] Successfully recorded genuine client reply from: ${senderAddress} for campaign ${campaignId}`);
+        console.log(`[REPLY_SYNC] Recorded client reply from ${senderAddress} (campaign ${campaignId}). STRICT POLICY: ZERO outbound emails sent back.`);
       } catch (itemErr) {
         console.warn(`[REPLY_SYNC] Error processing message item:`, itemErr.message);
       }
     }
 
-    console.log(`[REPLY_SYNC] Sync complete. Recorded ${newRepliesCount} new incoming client replies.`);
+    console.log(`[REPLY_SYNC] Sync complete. Recorded ${newRepliesCount} new incoming client replies. ZERO outbound emails sent.`);
     return { success: true, newRepliesCount };
   } catch (err) {
     console.error("[REPLY_SYNC] Error during IMAP sync:", err.message);

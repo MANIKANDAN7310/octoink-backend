@@ -16,7 +16,7 @@ const emailReplySchema = new mongoose.Schema(
     messageId: { type: String, default: "", index: true },
     status: {
       type: String,
-      enum: ["New Reply", "Contacted", "Qualified", "Follow-up", "Closed"],
+      enum: ["New Reply", "Qualified", "Contacted", "Converted", "Follow-up", "Closed"],
       default: "New Reply",
     },
   },
