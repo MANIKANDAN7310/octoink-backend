@@ -19,6 +19,7 @@ import portfolioRoutes from "./routes/portfolioRoutes.js";
 import statsRoutes from "./routes/statsRoutes.js";
 import paymentRoutes from "./routes/paymentRoutes.js";
 import emailTrackRoutes from "./routes/emailTrackRoutes.js";
+import leadFinderRoutes from "./routes/leadFinderRoutes.js";
 
 // Models for inline routes (banners, settings, contact)
 import Banner from "./models/Banner.js";
@@ -75,7 +76,7 @@ app.use(cors({
 // Rate Limiting
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 200, // limit each IP to 200 requests per windowMs
+    max: 2000, // limit each IP to 200 requests per windowMs
     message: { success: false, message: "Too many requests, try again later" },
     standardHeaders: true,
     legacyHeaders: false,
@@ -142,6 +143,7 @@ app.use("/api/portfolio", portfolioRoutes);
 app.use("/api/stats", statsRoutes);
 app.use("/api/payment", paymentRoutes);
 app.use("/api/email-track", emailTrackRoutes);
+app.use("/api/lead-finder", leadFinderRoutes);
 
 // â”€â”€â”€ Dashboard Specific Routes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 import { getClients, deleteClient, getClientById, deleteAllClients } from "./controllers/authController.js";
